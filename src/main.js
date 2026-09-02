@@ -81,7 +81,11 @@ async function analyzeSymbol(symbol, snapshot, scanStart, opportunities, current
   currentPrices[symbol] = candles[candles.length - 1].close;
 
   // SMC
-  const smcAnalysis = analyzeSMC(candles, { swingLookback: 2 });
+  const smcAnalysis = analyzeSMC(candles, {
+    swingLookback: 2,
+    depth: snapshot.depth || snapshot.orderBook || null,
+    aggTrades: snapshot.aggTrades || null,
+  });
   if (htfCandles.length > 10) {
     const htfSMC = analyzeSMC(htfCandles, { swingLookback: 2 });
     smcAnalysis.htf = htfSMC;

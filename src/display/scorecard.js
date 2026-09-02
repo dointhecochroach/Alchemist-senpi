@@ -133,6 +133,18 @@ export function renderScoreCard(opp) {
     }
     L.push(kvCheck('Displacement', smc.displacement?.detected ? `${smc.displacement.direction} (${smc.displacement.strength}%)` : 'NONE', smc.displacement?.detected));
   }
+  // Order book liquidity
+  if (smc.orderBookLiquidity) {
+    const ob = smc.orderBookLiquidity;
+    L.push(kv('Order Book', `${ob.direction} (${(ob.imbalance * 100).toFixed(0)}% bid)`));
+    L.push(kv('Bid/Ask Vol', `${ob.totalBidVolume} / ${ob.totalAskVolume}`));
+  }
+  // Whale trades
+  if (smc.whaleTrades) {
+    const wt = smc.whaleTrades;
+    L.push(kv('Whale Trades', `${wt.largeTradeCount} large (${wt.largeBuys}B / ${wt.largeSells}S)`));
+    L.push(kv('Whale Flow', `${wt.direction} (net ${wt.netFlow})`));
+  }
   L.push(line());
 
   // ── BREAKOUT / TRAP ──────────────────────────────────────

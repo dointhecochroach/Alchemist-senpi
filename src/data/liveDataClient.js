@@ -372,6 +372,86 @@ export class LiveDataClient {
     }));
   }
 
+  // ── Spot Price (works when futures is blocked) ──────────
+  async getSpotPrice(symbol) {
+    if (!this.spotAvailable) return null;
+    try {
+      const d = await this._spotRest('/api/v3/ticker/price', { symbol });
+      return { symbol, price: parseFloat(d.price) };
+    } catch { return null; }
+  }
+
+  // ── Order Book Depth ─────────────────────────────────────
+  async getOrderBook(symbol, limit = 20) {
+    if (this.futuresAvailable) {
+      try {
+        const d = await this._rest('/fapi/v1/depth', { symbol, limit });
+        return {
+          symbol,
+          bids: d.bids.map((b) => [parseFloat(b[0]), parseFloat(b[1])]),
+          asks: d.asks.map((a) => [parseFloat(a[0]), parseFloat(a[1])]),
+          lastUpdateId: d.lastUpdateId,
+        };
+      } catch (e) {
+        log(`Futures depth failed for ${symbol}, trying spot...`);
+      }
+    }
+    if (this.spotAvailable) {
+      try {
+        const d = await this._spotRest('/api/v3/depth', { symbol, limit });
+        return {
+          symbol,
+          bids: d.bids.map((b) => [parseFloat(b[0]), parseFloat(b[1])]),
+          asks: d.asks.map((a) => [parseFloat(a[0]), parseFloat(a[1])]),
+          lastUpdateId: d.lastUpdateId,
+        };
+      } catch { return null; }
+    }
+    return null;
+  }
+
+  // ── Aggregate Trades (large trades = whale activity) ─────
+  async getAggTrades(symbol, limit = 100) {
+    if (this.futuresAvailable) {
+      try {
+        const raw = await this._rest('/fapi/v1/aggTrades', { symbol, limit });
+        return raw.map((t) => ({
+          symbol,
+          price: parseFloat(t.p),
+          quantity: parseFloat(t.q),
+          timestamp: t.T,
+          isBuyerMaker: t.m,
+        }));
+      } catch (e) {
+        log(`Futures aggTrades failed for ${symbol}, trying spot...`);
+      }
+    }
+    if (this.spotAvailable) {
+      try {
+        const raw = await this._spotRest('/api/v3/aggTrades', { symbol, limit });
+        return raw.map((t) => ({
+          symbol,
+          price: parseFloat(t.p),
+          quantity: parseFloat(t.q),
+          timestamp: t.T,
+          isBuyerMaker: t.m,
+        }));
+      } catch { return []; }
+    }
+    return [];
+  }
+
+  // ── Server Time ──────────────────────────────────────────
+  async getServerTime() {
+    if (this.futuresAvailable) {
+      try { return (await this._rest('/fapi/v1/time')).serverTime; } catch {}
+    }
+    if (this.spotAvailable) {
+      try { return (await this._spotRest('/api/v3/time')).serverTime; } catch {}
+    }
+    return Date.now();
+  }
+
   // ═══════════════════════════════════════════════════════════
   //  WEBSOCKET — real-time kline + ticker data
   // ═══════════════════════════════════════════════════════════
@@ -618,6 +698,7 @@ export class LiveDataClient {
     const [
       openInterest, oiHistory, funding, fundingHistory,
       topTraderLS, globalLS, takerVolume,
+      orderBook, aggTrades,
     ] = await Promise.allSettled([
       this.getOpenInterest(symbol),
       this.getOpenInterestHistory(symbol, '15m', 30),
@@ -626,6 +707,8 @@ export class LiveDataClient {
       this.getTopTraderLS(symbol, '15m', 30),
       this.getGlobalLS(symbol, '15m', 30),
       this.getTakerVolume(symbol, '15m', 30),
+      this.getOrderBook(symbol, 20),
+      this.getAggTrades(symbol, 100),
     ]);
 
     const unwrap = (r, fallback = null) =>
@@ -653,6 +736,8 @@ export class LiveDataClient {
       topTraderLS: unwrap(topTraderLS, []),
       globalLS: unwrap(globalLS, []),
       takerVolume: unwrap(takerVolume, []),
+      orderBook: unwrap(orderBook),
+      aggTrades: unwrap(aggTrades, []),
       ticker24h: ticker,
     };
   }

@@ -641,6 +641,18 @@ export function analyzeSMC(candles, options = {}) {
   // 10. Current price
   const currentPrice = candles[candles.length - 1].close;
 
+  // 11. Order book liquidity (if depth data provided)
+  let orderBookLiquidity = null;
+  if (options.depth) {
+    orderBookLiquidity = analyzeOrderBook(options.depth, currentPrice);
+  }
+
+  // 12. Aggregate trade analysis (whale trades)
+  let whaleTrades = null;
+  if (options.aggTrades) {
+    whaleTrades = analyzeAggTrades(options.aggTrades);
+  }
+
   // 11. SMC evidence score (0-100)
   let smcScore = 0;
   let bullishCount = 0;
@@ -704,8 +716,89 @@ export function analyzeSMC(candles, options = {}) {
     displacement,
     breakout,
     protectedLevels,
+    orderBookLiquidity,
+    whaleTrades,
     smcScore,
     smcBias,
     evidence: evidenceList,
+  };
+}
+
+// ──────────────────────────────────────────────────────────────
+//  ORDER BOOK ANALYSIS
+// ──────────────────────────────────────────────────────────────
+
+/**
+ * Analyze order book for real liquidity levels.
+ * Shows where large buy/sell walls are.
+ */
+export function analyzeOrderBook(depth, currentPrice) {
+  if (!depth || !depth.bids || !depth.asks) return null;
+
+  const bidLevels = depth.bids.slice(0, 10);
+  const askLevels = depth.asks.slice(0, 10);
+
+  const totalBidVol = bidLevels.reduce((s, b) => s + b[1], 0);
+  const totalAskVol = askLevels.reduce((s, a) => s + a[1], 0);
+
+  // Find largest bid/ask walls
+  const largestBidWall = bidLevels.reduce((max, b) => b[1] > max[1] ? b : max, bidLevels[0]);
+  const largestAskWall = askLevels.reduce((max, a) => a[1] > max[1] ? a : max, askLevels[0]);
+
+  // Bid/ask imbalance
+  const imbalance = totalBidVol / (totalBidVol + totalAskVol);
+
+  return {
+    totalBidVolume: parseFloat(totalBidVol.toFixed(4)),
+    totalAskVolume: parseFloat(totalAskVol.toFixed(4)),
+    imbalance: parseFloat(imbalance.toFixed(2)), // >0.5 = more bids = bullish
+    direction: imbalance > 0.55 ? 'BULLISH' : imbalance < 0.45 ? 'BEARISH' : 'NEUTRAL',
+    largestBidWall: { price: largestBidWall[0], volume: largestBidWall[1] },
+    largestAskWall: { price: largestAskWall[0], volume: largestAskWall[1] },
+    spread: askLevels[0][0] - bidLevels[0][0],
+  };
+}
+
+// ──────────────────────────────────────────────────────────────
+//  AGGREGATE TRADES ANALYSIS (WHALE DETECTION)
+// ──────────────────────────────────────────────────────────────
+
+/**
+ * Analyze aggregate trades for whale activity.
+ * Large trades = institutional/smart money participation.
+ */
+export function analyzeAggTrades(trades) {
+  if (!trades || trades.length === 0) return null;
+
+  // Sort by quantity to find large trades
+  const sorted = [...trades].sort((a, b) => b.quantity - a.quantity);
+  const topTrades = sorted.slice(0, 10);
+
+  // Calculate average trade size
+  const avgSize = trades.reduce((s, t) => s + t.quantity, 0) / trades.length;
+
+  // Large trades = >3x average
+  const largeTrades = trades.filter((t) => t.quantity > avgSize * 3);
+  const largeBuys = largeTrades.filter((t) => !t.isBuyerMaker).length; // taker buys
+  const largeSells = largeTrades.filter((t) => t.isBuyerMaker).length; // taker sells
+
+  // Net flow from large trades
+  const netFlow = largeTrades.reduce((sum, t) => {
+    return sum + (t.isBuyerMaker ? -t.quantity : t.quantity);
+  }, 0);
+
+  return {
+    totalTrades: trades.length,
+    avgTradeSize: parseFloat(avgSize.toFixed(4)),
+    largeTradeCount: largeTrades.length,
+    largeBuys,
+    largeSells,
+    netFlow: parseFloat(netFlow.toFixed(4)),
+    direction: netFlow > 0 ? 'BULLISH' : netFlow < 0 ? 'BEARISH' : 'NEUTRAL',
+    topTrades: topTrades.map((t) => ({
+      price: t.price,
+      quantity: t.quantity,
+      isBuy: !t.isBuyerMaker,
+    })),
   };
 }
