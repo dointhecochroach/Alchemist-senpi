@@ -141,21 +141,25 @@ async function analyzeSymbol(symbol, snapshot, scanStart, opportunities, current
 
 // ── Main ─────────────────────────────────────────────────────
 async function main() {
-  console.log('\n  🧪 ALCHEMIST BRAIN — STARTING UP');
-  console.log(`  Mode: ${forceMock ? 'MOCK (forced)' : 'LIVE (real Binance data → mock fallback)'}`);
-  console.log(`  Scanner: Top 15 coins by volume × volatility`);
-  console.log(`  Balance: $${config.paperBalance} (paper)`);
-  console.log(`  Auto-Buy: ${config.autoBuy ? 'ON' : 'OFF'}`);
+  // Single startup line — no waterfall
+  process.stdout.write('  🧪 ALCHEMIST BRAIN — Starting up...\n');
 
-  // ── Initialize data source ───────────────────────────────
-  if (!forceMock) {
-    console.log('  Connecting to Binance...');
+  if (forceMock) {
+    mockMode = true;
+    process.stdout.write('\r  🧪 ALCHEMIST BRAIN — MOCK (forced)         \n');
+  } else {
+    process.stdout.write('  Connecting to Binance...');
     const ok = await liveClient.init();
     if (ok) {
-      console.log('  ✓ Binance REST available');
+      process.stdout.write('\r  🧪 ALCHEMIST BRAIN — ');
+      if (liveClient.futuresAvailable) {
+        process.stdout.write('LIVE (Futures + Spot)         \n');
+      } else if (liveClient.spotAvailable) {
+        process.stdout.write('LIVE (Spot only — futures blocked)   \n');
+      }
       scanner = new CoinScanner(liveClient);
     } else {
-      console.log('  ⚠️  Binance unavailable — switching to MOCK');
+      process.stdout.write('\r  🧪 ALCHEMIST BRAIN — MOCK (no API reachable)   \n');
       mockMode = true;
     }
   }
@@ -163,23 +167,17 @@ async function main() {
   if (mockMode) {
     scanner = new CoinScanner({ getExchangeInfo: async () => ({ symbols: [] }), getAllTickers24h: async () => [] });
     scanner._fallbackCoins();
-  }
-
-  // ── Scan for top coins ────────────────────────────────────
-  console.log('  Scanning for top coins...');
-  if (!mockMode) {
+    scanner.coins = getMockScannerCoins(config.symbols);
+  } else {
+    // ── Scan for top coins ────────────────────────────────────
     try {
       await scanner.scanTopCoins();
     } catch (e) {
-      console.log(`  ⚠️  Scanner error: ${e.message}, using fallback`);
+      addLog(`Scanner error: ${e.message}, using fallback coins`);
       scanner._fallbackCoins();
     }
-  } else {
-    scanner.coins = getMockScannerCoins(config.symbols);
   }
   currentSymbols = scanner.coins.map((c) => c.symbol);
-  console.log(`  Tracking: ${currentSymbols.join(', ')}`);
-  console.log('');
 
   // ── Connect WebSocket (live mode) ─────────────────────────
   if (!mockMode) {
@@ -187,7 +185,7 @@ async function main() {
       await liveClient.connectWebSocket(currentSymbols, config.timeframes);
       addLog('📡 WebSocket connected — real-time data streaming');
     } catch (e) {
-      console.log(`  ⚠️  WebSocket failed: ${e.message} — using REST polling`);
+      addLog(`⚠️ WebSocket failed: ${e.message} — using REST for candles`);
     }
   }
 
@@ -202,9 +200,9 @@ async function main() {
     scanLog,
   });
 
-  // ── Derivatives refresh timer (every 5 min) ───────────────
+  // ── Derivatives refresh timer (every 30 sec in live mode) ───────
   let lastDerivativesRefresh = 0;
-  const DERIVATIVES_INTERVAL = 5 * 60 * 1000;
+  const DERIVATIVES_INTERVAL = 30 * 1000;
 
   // ── Continuous loop ───────────────────────────────────────
   while (running) {

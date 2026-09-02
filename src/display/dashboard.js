@@ -27,6 +27,11 @@ const C = {
   hide: '\x1b[?25l', show: '\x1b[?25h',
   clear: '\x1b[2J', clearLine: '\x1b[2K',
   home: '\x1b[H',
+  // Alternate screen buffer — preserves scrollback when quitting
+  altScreenOn: '\x1b[?1049h', altScreenOff: '\x1b[?1049l',
+  // Selective line clear
+  clearFromCursorDown: '\x1b[J',
+  saveCursor: '\x1b7', restoreCursor: '\x1b8',
 };
 
 const VIEWS = ['dashboard', 'scorecard', 'journal', 'history', 'scanner', 'memory'];
@@ -47,11 +52,16 @@ export class Dashboard {
       journal: [],
     };
     this._stdin = null;
+    this._needsFullRedraw = true;
+    this._lastRender = '';
   }
 
   start() {
     this.running = true;
-    // Only use raw mode if we have a real TTY
+    // Use alternate screen buffer so we don't mess with scrollback
+    process.stdout.write(C.altScreenOn);
+    process.stdout.write(C.hide);
+
     if (process.stdin.isTTY) {
       process.stdin.setRawMode(true);
       process.stdin.resume();
@@ -65,14 +75,12 @@ export class Dashboard {
         const view = VIEW_KEYS[key];
         if (view) {
           this.currentView = view;
+          this._needsFullRedraw = true;
           this.render();
         }
       });
-      process.stdout.write(C.hide);
-    } else {
-      // Non-TTY: just render, no keyboard input
-      // Still listen for Ctrl+C via process signal
     }
+    this._needsFullRedraw = true;
     this.render();
   }
 
@@ -83,6 +91,7 @@ export class Dashboard {
       process.stdin.pause();
     }
     process.stdout.write(C.show);
+    process.stdout.write(C.altScreenOff);
     process.stdout.write(C.reset);
   }
 
@@ -94,8 +103,19 @@ export class Dashboard {
   render() {
     if (!this.running) return;
     const out = this._renderView();
-    process.stdout.write(C.clear + C.home);
-    process.stdout.write(out);
+    if (this._needsFullRedraw) {
+      // Full redraw — only on view switch or first render
+      process.stdout.write(C.home + out);
+      this._needsFullRedraw = false;
+      this._lastRender = out;
+    } else {
+      // In-place update — move cursor to top-left, rewrite lines
+      // No clear, just overwrite — prevents waterfall/flicker
+      process.stdout.write(C.home + out);
+      // Clear any leftover lines below
+      const lineCount = out.split('\n').length;
+      process.stdout.write(`\x1b[${lineCount + 1};1H` + C.clearFromCursorDown);
+    }
   }
 
   _renderView() {

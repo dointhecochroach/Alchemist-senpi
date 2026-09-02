@@ -14,7 +14,7 @@ export class CoinScanner {
     this.coins = [];           // Current top coins
     this.allPairs = [];        // All USDT futures pairs
     this.lastScan = 0;
-    this.scanIntervalMs = 5 * 60 * 1000;  // Rescan every 5 min
+    this.scanIntervalMs = 30 * 1000;  // Rescan every 30 seconds
     this.minVolume = 50_000_000;  // Min 24h volume ($50M)
     this.maxCoins = 15;
   }

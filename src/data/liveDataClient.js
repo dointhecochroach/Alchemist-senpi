@@ -24,10 +24,20 @@
 const log = (...a) => console.log('[LiveData]', ...a);
 const logErr = (...a) => console.error('[LiveData]', ...a);
 
-// Binance endpoint alternatives — some regions block one but not others
-const REST_ENDPOINTS = [
+// Binance endpoint alternatives — futures + spot
+// Some regions block fapi but api.binance.com works for spot
+const FUTURES_REST_ENDPOINTS = [
   'https://fapi.binance.com',
   'https://fapi.binance.me',
+];
+
+const SPOT_REST_ENDPOINTS = [
+  'https://api.binance.com',
+  'https://api.binance.me',
+  'https://api1.binance.com',
+  'https://api2.binance.com',
+  'https://api3.binance.com',
+  'https://api4.binance.com',
 ];
 
 const WS_ENDPOINTS = [
@@ -37,7 +47,10 @@ const WS_ENDPOINTS = [
 
 export class LiveDataClient {
   constructor() {
-    this.restBase = null;       // Active REST URL (discovered by testing)
+    this.restBase = null;       // Active futures REST URL
+    this.spotBase = null;       // Active spot REST URL (fallback)
+    this.futuresAvailable = false;
+    this.spotAvailable = false;
     this.wsBase = null;         // Active WS URL
     this._ws = null;            // Active WebSocket
     this._wsReconnectTimer = null;
@@ -55,8 +68,8 @@ export class LiveDataClient {
   // ═══════════════════════════════════════════════════════════
 
   async init() {
-    // Test REST endpoints
-    for (const url of REST_ENDPOINTS) {
+    // Test futures REST endpoints
+    for (const url of FUTURES_REST_ENDPOINTS) {
       try {
         const resp = await fetch(`${url}/fapi/v1/ping`, {
           signal: AbortSignal.timeout(5000),
@@ -64,20 +77,41 @@ export class LiveDataClient {
         });
         if (resp.ok) {
           this.restBase = url;
-          log(`REST endpoint: ${url}`);
+          this.futuresAvailable = true;
+          log(`Futures REST: ${url} ✓`);
           break;
         } else if (resp.status === 451) {
-          log(`${url} geo-blocked (451), trying next...`);
+          
           this._restBlocked.add(url);
         }
       } catch (e) {
-        log(`${url} unreachable: ${e.message}`);
+        
         this._restBlocked.add(url);
       }
     }
 
-    if (!this.restBase) {
-      logErr('All REST endpoints blocked. Will use WebSocket only.');
+    // Test spot REST endpoints (fallback for prices/klines)
+    for (const url of SPOT_REST_ENDPOINTS) {
+      try {
+        const resp = await fetch(`${url}/api/v3/ping`, {
+          signal: AbortSignal.timeout(5000),
+          headers: { 'User-Agent': 'AlchemistBrain/1.0' },
+        });
+        if (resp.ok) {
+          this.spotBase = url;
+          this.spotAvailable = true;
+          log(`Spot REST: ${url} ✓`);
+          break;
+        } else if (resp.status === 451) {
+          
+        }
+      } catch (e) {
+        
+      }
+    }
+
+    if (!this.restBase && this.spotBase) {
+      log('Futures blocked — using spot API for prices/klines. Derivatives data (OI/funding/LS) may be limited.');
     }
 
     // WS endpoint — try matching the working REST, or test each
@@ -86,11 +120,11 @@ export class LiveDataClient {
       this.wsBase = WS_ENDPOINTS[1];
     }
 
-    return this.restBase !== null;
+    return this.restBase !== null || this.spotBase !== null;
   }
 
   get available() {
-    return this.restBase !== null;
+    return this.restBase !== null || this.spotBase !== null;
   }
 
   // ═══════════════════════════════════════════════════════════
@@ -98,9 +132,17 @@ export class LiveDataClient {
   // ═══════════════════════════════════════════════════════════
 
   async _rest(path, params = {}) {
-    if (!this.restBase) throw new Error('No REST endpoint available');
+    if (!this.restBase) throw new Error('No futures REST endpoint available');
+    return this._doRest(this.restBase, path, params, FUTURES_REST_ENDPOINTS);
+  }
 
-    // Simple rate limiter — 1200 weight/min (conservative)
+  async _spotRest(path, params = {}) {
+    if (!this.spotBase) throw new Error('No spot REST endpoint available');
+    return this._doRest(this.spotBase, path, params, SPOT_REST_ENDPOINTS);
+  }
+
+  async _doRest(base, path, params = {}, endpointList) {
+    // Simple rate limiter
     const now = Date.now();
     if (now > this._rateLimitState.resetTime) {
       this._rateLimitState.count = 0;
@@ -108,13 +150,12 @@ export class LiveDataClient {
     }
     if (this._rateLimitState.count > 1200) {
       const wait = this._rateLimitState.resetTime - now;
-      log(`Rate limit approaching, waiting ${wait}ms...`);
       await new Promise((r) => setTimeout(r, wait));
     }
     this._rateLimitState.count++;
 
     const qs = new URLSearchParams(params).toString();
-    const url = `${this.restBase}${path}${qs ? `?${qs}` : ''}`;
+    const url = `${base}${path}${qs ? `?${qs}` : ''}`;
 
     try {
       const resp = await fetch(url, {
@@ -126,29 +167,27 @@ export class LiveDataClient {
         const retry = parseInt(resp.headers.get('Retry-After') || '5', 10);
         log(`Rate limited (429), waiting ${retry}s...`);
         await new Promise((r) => setTimeout(r, retry * 1000));
-        return this._rest(path, params); // Retry once
+        return this._doRest(base, path, params, endpointList);
       }
 
       if (resp.status === 451) {
-        this._restBlocked.add(this.restBase);
-        // Try switching endpoint
-        for (const alt of REST_ENDPOINTS) {
-          if (this._restBlocked.has(alt)) continue;
-          this.restBase = alt;
-          log(`Switched REST to ${alt}`);
-          return this._rest(path, params);
+        // This endpoint is geo-blocked, try switching
+        for (const alt of endpointList) {
+          if (alt === base || this._restBlocked.has(alt)) continue;
+          log(`Switching endpoint: ${base} → ${alt}`);
+          if (endpointList === FUTURES_REST_ENDPOINTS) this.restBase = alt;
+          else this.spotBase = alt;
+          return this._doRest(alt, path, params, endpointList);
         }
-        throw new Error('All REST endpoints geo-blocked (451)');
+        throw new Error(`Endpoint geo-blocked (451): ${base}`);
       }
 
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       return resp.json();
     } catch (e) {
-      // Try alternate endpoint on network error
-      for (const alt of REST_ENDPOINTS) {
-        if (alt === this.restBase || this._restBlocked.has(alt)) continue;
-        this.restBase = alt;
-        log(`Network error, trying ${alt}...`);
+      // Try alternate endpoints on network error
+      for (const alt of endpointList) {
+        if (alt === base || this._restBlocked.has(alt)) continue;
         try {
           const qs2 = new URLSearchParams(params).toString();
           const url2 = `${alt}${path}${qs2 ? `?${qs2}` : ''}`;
@@ -156,7 +195,11 @@ export class LiveDataClient {
             headers: { 'User-Agent': 'AlchemistBrain/1.0' },
             signal: AbortSignal.timeout(10000),
           });
-          if (resp2.ok) return resp2.json();
+          if (resp2.ok) {
+            if (endpointList === FUTURES_REST_ENDPOINTS) this.restBase = alt;
+            else this.spotBase = alt;
+            return resp2.json();
+          }
         } catch {}
       }
       throw e;
@@ -165,86 +208,132 @@ export class LiveDataClient {
 
   // ── Exchange Info (all trading pairs) ─────────────────────
   async getExchangeInfo() {
-    return this._rest('/fapi/v1/exchangeInfo');
+    if (this.futuresAvailable) {
+      try { return await this._rest('/fapi/v1/exchangeInfo'); }
+      catch (e) { log('Futures exchangeInfo failed, trying spot'); }
+    }
+    return this._spotRest('/api/v3/exchangeInfo');
   }
 
   // ── All 24h tickers (single call) ─────────────────────────
   async getAllTickers24h() {
-    return this._rest('/fapi/v1/ticker/24hr');
+    if (this.futuresAvailable) {
+      try { return await this._rest('/fapi/v1/ticker/24hr'); }
+      catch (e) { log('Futures tickers failed, trying spot'); }
+    }
+    const data = await this._spotRest('/api/v3/ticker/24hr');
+    return data.filter((t) => t.symbol.endsWith('USDT'));
   }
 
   // ── Open Interest ─────────────────────────────────────────
+  // Futures-only data — returns null if futures API is blocked
   async getOpenInterest(symbol) {
-    const d = await this._rest('/fapi/v1/openInterest', { symbol });
-    return { symbol, openInterest: parseFloat(d.openInterest), timestamp: d.time };
+    if (!this.futuresAvailable) return null;
+    try {
+      const d = await this._rest('/fapi/v1/openInterest', { symbol });
+      return { symbol, openInterest: parseFloat(d.openInterest), timestamp: d.time };
+    } catch { return null; }
   }
 
   async getOpenInterestHistory(symbol, period = '15m', limit = 30) {
-    const raw = await this._rest('/futures/data/openInterestHist', { symbol, period, limit });
-    return raw.map((r) => ({
-      timestamp: r.timestamp,
-      sumOpenInterest: parseFloat(r.sumOpenInterest),
-      sumOpenInterestValue: parseFloat(r.sumOpenInterestValue),
-    }));
+    if (!this.futuresAvailable) return [];
+    try {
+      const raw = await this._rest('/futures/data/openInterestHist', { symbol, period, limit });
+      return raw.map((r) => ({
+        timestamp: r.timestamp,
+        sumOpenInterest: parseFloat(r.sumOpenInterest),
+        sumOpenInterestValue: parseFloat(r.sumOpenInterestValue),
+      }));
+    } catch { return []; }
   }
 
   // ── Funding Rate ──────────────────────────────────────────
+  // Futures-only — returns null if blocked
   async getFundingRate(symbol) {
-    const d = await this._rest('/fapi/v1/premiumIndex', { symbol });
-    return {
-      symbol,
-      markPrice: parseFloat(d.markPrice),
-      fundingRate: parseFloat(d.lastFundingRate),
-      nextFundingTime: d.nextFundingTime,
-      timestamp: d.time,
-    };
+    if (!this.futuresAvailable) return null;
+    try {
+      const d = await this._rest('/fapi/v1/premiumIndex', { symbol });
+      return {
+        symbol,
+        markPrice: parseFloat(d.markPrice),
+        fundingRate: parseFloat(d.lastFundingRate),
+        nextFundingTime: d.nextFundingTime,
+        timestamp: d.time,
+      };
+    } catch { return null; }
   }
 
   async getFundingHistory(symbol, limit = 30) {
-    const raw = await this._rest('/fapi/v1/fundingRate', { symbol, limit });
-    return raw.map((r) => ({
-      symbol: r.symbol,
-      fundingRate: parseFloat(r.fundingRate),
-      fundingTime: r.fundingTime,
-    }));
+    if (!this.futuresAvailable) return [];
+    try {
+      const raw = await this._rest('/fapi/v1/fundingRate', { symbol, limit });
+      return raw.map((r) => ({
+        symbol: r.symbol,
+        fundingRate: parseFloat(r.fundingRate),
+        fundingTime: r.fundingTime,
+      }));
+    } catch { return []; }
   }
 
   // ── Long/Short Ratios ─────────────────────────────────────
+  // Futures-only — returns empty if blocked
   async getTopTraderLS(symbol, period = '15m', limit = 30) {
-    const raw = await this._rest('/futures/data/topLongShortPositionRatio', { symbol, period, limit });
-    return raw.map((r) => ({
-      timestamp: r.timestamp,
-      longShortRatio: parseFloat(r.longShortRatio),
-      longAccount: parseFloat(r.longAccount),
-      shortAccount: parseFloat(r.shortAccount),
-      longPosition: parseFloat(r.longPosition || 0),
-      shortPosition: parseFloat(r.shortPosition || 0),
-    }));
+    if (!this.futuresAvailable) return [];
+    try {
+      const raw = await this._rest('/futures/data/topLongShortPositionRatio', { symbol, period, limit });
+      return raw.map((r) => ({
+        timestamp: r.timestamp,
+        longShortRatio: parseFloat(r.longShortRatio),
+        longAccount: parseFloat(r.longAccount),
+        shortAccount: parseFloat(r.shortAccount),
+        longPosition: parseFloat(r.longPosition || 0),
+        shortPosition: parseFloat(r.shortPosition || 0),
+      }));
+    } catch { return []; }
   }
 
   async getGlobalLS(symbol, period = '15m', limit = 30) {
-    const raw = await this._rest('/futures/data/globalLongShortAccountRatio', { symbol, period, limit });
-    return raw.map((r) => ({
-      timestamp: r.timestamp,
-      longShortRatio: parseFloat(r.longShortRatio),
-      longAccount: parseFloat(r.longAccount),
-      shortAccount: parseFloat(r.shortAccount),
-    }));
+    if (!this.futuresAvailable) return [];
+    try {
+      const raw = await this._rest('/futures/data/globalLongShortAccountRatio', { symbol, period, limit });
+      return raw.map((r) => ({
+        timestamp: r.timestamp,
+        longShortRatio: parseFloat(r.longShortRatio),
+        longAccount: parseFloat(r.longAccount),
+        shortAccount: parseFloat(r.shortAccount),
+      }));
+    } catch { return []; }
   }
 
   async getTakerVolume(symbol, period = '15m', limit = 30) {
-    const raw = await this._rest('/futures/data/takerlongshortRatio', { symbol, period, limit });
-    return raw.map((r) => ({
-      timestamp: r.timestamp,
-      buySellRatio: parseFloat(r.buySellRatio),
-      buyVol: parseFloat(r.buyVol),
-      sellVol: parseFloat(r.sellVol),
-    }));
+    if (!this.futuresAvailable) return [];
+    try {
+      const raw = await this._rest('/futures/data/takerlongshortRatio', { symbol, period, limit });
+      return raw.map((r) => ({
+        timestamp: r.timestamp,
+        buySellRatio: parseFloat(r.buySellRatio),
+        buyVol: parseFloat(r.buyVol),
+        sellVol: parseFloat(r.sellVol),
+      }));
+    } catch { return []; }
   }
 
   // ── Historical klines (for initial load) ──────────────────
   async getKlines(symbol, interval, limit = 200) {
-    const raw = await this._rest('/fapi/v1/klines', { symbol, interval, limit });
+    if (this.futuresAvailable) {
+      try {
+        const raw = await this._rest('/fapi/v1/klines', { symbol, interval, limit });
+        return this._parseKlines(raw);
+      } catch (e) {
+        log(`Futures klines failed for ${symbol}, trying spot...`);
+      }
+    }
+    // Spot fallback — same kline format
+    const raw = await this._spotRest('/api/v3/klines', { symbol, interval, limit });
+    return this._parseKlines(raw);
+  }
+
+  _parseKlines(raw) {
     return raw.map((k) => ({
       openTime: k[0],
       open: parseFloat(k[1]),
