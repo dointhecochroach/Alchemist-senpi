@@ -24,7 +24,7 @@ export const config = {
 
   // ── Risk Management ──────────────────────────────────────
   initialStoplossPct: 3.0,       // 3% initial SL
-  tp1Pct: 3.0,                   // TP1 at 3%
+  tp1Pct: 1.5,                   // TP1 at 1.5%
   tp1SellPct: 30,                // Sell 30% at TP1
   breakevenAfterTP1: true,       // Move SL to breakeven after TP1
   trailingEnabled: true,         // Adaptive trailing on runner
