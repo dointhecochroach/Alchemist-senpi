@@ -456,16 +456,33 @@ export class Dashboard {
       L.push(`  ${C.dim}Breakeven${C.reset}   ${r.breakevenAfterTP1 ? 'Yes' : 'No'}`);
       L.push(`  ${C.dim}Trail Start${C.reset} ${r.trailingStartPct || 2}%`);
       L.push(`  ${C.dim}Trail Step${C.reset}  ${r.trailingStepPct || 0.5}%`);
+    }
 
-      if (r.adjustments?.length > 0) {
+    // Sizing rules (learned)
+    L.push('');
+    L.push(`  ${C.brightWhite}${C.bold}Adaptive Sizing & Leverage${C.reset}`);
+    if (mem?.sizingRules) {
+      const s = mem.sizingRules;
+      L.push(`  ${C.dim}Base Risk${C.reset}     ${s.baseRiskPct}% per trade`);
+      L.push(`  ${C.dim}Base Leverage${C.reset} ${s.baseLeverage}x (max ${s.maxLeverage}x)`);
+      L.push(`  ${C.dim}High Conf Mult${C.reset} ${s.highConfidenceMultiplier}x`);
+      L.push(`  ${C.dim}Low Conf Mult${C.reset}  ${s.lowConfidenceMultiplier}x`);
+
+      // Show per-pattern learned sizing
+      const patternSizing = Object.entries(s.patternSizing || {}).filter(([_, p]) => p.sampleSize >= 1);
+      if (patternSizing.length > 0) {
         L.push('');
-        L.push(`  ${C.brightWhite}${C.bold}Learned Adjustments (${r.adjustments.length})${C.reset}`);
-        for (const adj of r.adjustments.slice(-5)) {
-          L.push(`  ${C.dim}•${C.reset} ${adj.result} (${adj.pnlPct > 0 ? '+' : ''}${adj.pnlPct}%)`);
-          for (const obs of (adj.observations || [])) {
-            L.push(`    ${C.yellow}${obs}${C.reset}`);
-          }
+        L.push(`  ${C.dim}Learned per-pattern sizing:${C.reset}`);
+        for (const [key, ps] of patternSizing.slice(-5).reverse()) {
+          const shortKey = key.split('|').slice(0, 3).join(' ');
+          const c = ps.winRate >= 60 ? C.brightGreen : ps.winRate <= 40 ? C.brightRed : C.dim;
+          L.push(`  ${c}${ps.winRate}%${C.reset} ${C.dim}(${ps.sampleSize}T)${C.reset} ${C.dim}risk ${ps.riskPct}% lev ${ps.leverage}x${C.reset} ${C.dim}${shortKey}${C.reset}`);
         }
+      }
+
+      if (s.sizingAdjustments?.length > 0) {
+        L.push('');
+        L.push(`  ${C.dim}Last ${s.sizingAdjustments.length} sizing adjustments logged${C.reset}`);
       }
     }
 

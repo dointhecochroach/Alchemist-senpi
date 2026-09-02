@@ -32,7 +32,7 @@ export class Memory {
       trades: [],          // Completed trade records
       patterns: {},         // Pattern → performance mapping
       managementRules: {    // Adaptive management parameters
-        tp1Pct: 3.0,
+        tp1Pct: 1.5,
         tp1SellPct: 30,
         breakevenAfterTP1: true,
         trailingStartPct: 2.0,
@@ -41,6 +41,19 @@ export class Memory {
         trailingSensitivity: 1.0,
         // Learned adjustments
         adjustments: [],
+      },
+      sizingRules: {        // Adaptive position sizing & leverage
+        baseRiskPct: 1.0,       // Start at 1% risk per trade
+        baseLeverage: 3,         // Start at 3x leverage
+        maxLeverage: 10,         // Hard cap
+        minLeverage: 1,
+        // Per-pattern adjustments
+        patternSizing: {},       // pattern key → { riskPct, leverage, winRate, avgPnL }
+        // Global learned adjustments
+        sizingAdjustments: [],
+        // Confidence-based scaling
+        highConfidenceMultiplier: 1.5,   // If confidence > 80, scale up
+        lowConfidenceMultiplier: 0.5,    // If confidence < 60, scale down
       },
       learningStats: {
         totalTrades: 0,
@@ -130,6 +143,7 @@ export class Memory {
     this._updatePattern(record);
     this._updateStats();
     this._updateManagementRules(record);
+    this._updateSizingRules(record);
     this._save();
   }
 
@@ -179,6 +193,107 @@ export class Memory {
 
     p.winRate = Math.round((p.wins / p.sampleSize) * 100);
     p.avgPnL = parseFloat((p.totalPnL / p.sampleSize).toFixed(2));
+  }
+
+  /**
+   * Get adaptive position sizing and leverage for a pattern.
+   * Returns { riskPct, leverage } adjusted by learned performance.
+   */
+  getSizingForPattern(patternKey, confidence = 50) {
+    const rules = this.data.sizingRules;
+    let riskPct = rules.baseRiskPct;
+    let leverage = rules.baseLeverage;
+
+    // Adjust based on pattern history
+    const pattern = this.data.patterns[patternKey];
+    if (pattern && pattern.sampleSize >= 3) {
+      const ps = rules.patternSizing[patternKey];
+      if (ps) {
+        riskPct = ps.riskPct;
+        leverage = ps.leverage;
+      }
+      // Fine-tune based on win rate
+      if (pattern.winRate >= 70) {
+        riskPct *= 1.2;  // Winning pattern → risk more
+        leverage = Math.min(rules.maxLeverage, leverage + 1);
+      } else if (pattern.winRate <= 40) {
+        riskPct *= 0.6;  // Losing pattern → risk less
+        leverage = Math.max(rules.minLeverage, leverage - 1);
+      }
+    }
+
+    // Adjust based on confidence
+    if (confidence >= 80) {
+      riskPct *= rules.highConfidenceMultiplier;
+    } else if (confidence < 60) {
+      riskPct *= rules.lowConfidenceMultiplier;
+    }
+
+    // Clamp
+    riskPct = Math.max(0.25, Math.min(5.0, riskPct));
+    leverage = Math.max(rules.minLeverage, Math.min(rules.maxLeverage, leverage));
+
+    return {
+      riskPct: parseFloat(riskPct.toFixed(2)),
+      leverage: Math.round(leverage),
+    };
+  }
+
+  getSizingRules() {
+    return this.data.sizingRules;
+  }
+
+  _updateSizingRules(record) {
+    const rules = this.data.sizingRules;
+    const key = record.pattern;
+    if (!key) return;
+
+    // Initialize pattern sizing
+    if (!rules.patternSizing[key]) {
+      rules.patternSizing[key] = {
+        riskPct: rules.baseRiskPct,
+        leverage: rules.baseLeverage,
+        winRate: 0,
+        avgPnL: 0,
+        sampleSize: 0,
+      };
+    }
+
+    const ps = rules.patternSizing[key];
+    ps.sampleSize++;
+    ps.winRate = Math.round(((ps.winRate / 100) * (ps.sampleSize - 1) + (record.result === 'WIN' ? 1 : 0)) * 100);
+    ps.avgPnL = parseFloat(((ps.avgPnL * (ps.sampleSize - 1) + record.pnlPct) / ps.sampleSize).toFixed(2));
+
+    // Adjust risk and leverage based on performance
+    if (ps.sampleSize >= 3) {
+      if (ps.winRate >= 65 && ps.avgPnL > 0) {
+        // Winning pattern → gradually increase
+        ps.riskPct = Math.min(5.0, parseFloat((ps.riskPct * 1.1).toFixed(2)));
+        ps.leverage = Math.min(rules.maxLeverage, ps.leverage + 1);
+      } else if (ps.winRate <= 40 || ps.avgPnL < 0) {
+        // Losing pattern → decrease
+        ps.riskPct = Math.max(0.25, parseFloat((ps.riskPct * 0.8).toFixed(2)));
+        ps.leverage = Math.max(rules.minLeverage, ps.leverage - 1);
+      }
+    }
+
+    // Log sizing adjustment
+    rules.sizingAdjustments.push({
+      timestamp: Date.now(),
+      tradeId: record.id,
+      pattern: key,
+      result: record.result,
+      pnlPct: record.pnlPct,
+      adjustedRisk: ps.riskPct,
+      adjustedLeverage: ps.leverage,
+      patternWinRate: ps.winRate,
+      patternSampleSize: ps.sampleSize,
+    });
+
+    // Keep only last 50 adjustments
+    if (rules.sizingAdjustments.length > 50) {
+      rules.sizingAdjustments = rules.sizingAdjustments.slice(-50);
+    }
   }
 
   _updateStats() {

@@ -69,14 +69,16 @@ export class PaperTrader {
     const entryPrice = thesis.currentPrice || riskAnalysis.entryPrice;
     if (!entryPrice) return null;
 
-    // Calculate position size
+    // Calculate position size with learned leverage
     const riskUSD = riskAnalysis.riskUSD;
     const stopLossPrice = riskAnalysis.stopLossPrice;
     const stopDistPct = Math.abs((entryPrice - stopLossPrice) / entryPrice) * 100;
-    let positionSize = riskUSD / (stopDistPct / 100); // Position size in USD
+    const leverage = riskAnalysis.leverage || 3;
+    // Position size = riskUSD / stopDist% × leverage
+    let positionSize = (riskUSD / (stopDistPct / 100)) * leverage;
 
-    // Cap position size at 3x balance (max 3x leverage)
-    const maxSize = this.balance * 3;
+    // Cap at max leverage × balance
+    const maxSize = this.balance * (leverage);
     if (positionSize > maxSize) {
       positionSize = maxSize;
     }
@@ -110,6 +112,7 @@ export class PaperTrader {
       smartMoneySummary: thesis.primaryThesis.smartMoneyBias,
       pattern: this._patternKey(symbol, direction, thesis),
       riskUSD,
+      leverage,
       status: 'OPEN',
     };
 

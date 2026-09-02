@@ -26,7 +26,7 @@ import { RiskAnalyzer } from './riskAnalysis.js';
 export class ThesisEngine {
   constructor(memory) {
     this.memory = memory || new Memory();
-    this.riskAnalyzer = new RiskAnalyzer();
+    this.riskAnalyzer = new RiskAnalyzer(null, this.memory);
   }
 
   /**

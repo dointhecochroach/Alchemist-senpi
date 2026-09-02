@@ -113,7 +113,10 @@ async function analyzeSymbol(symbol, snapshot, scanStart, opportunities, current
     if (existing) {
       return;
     }
-    const riskAnalysis = brain.riskAnalyzer.analyze(smcAnalysis, smartMoneyAnalysis, accountState, tradeDir);
+    // Get pattern key for learned sizing
+    const patternKey = memory._patternKey(symbol, tradeDir, smcAnalysis, smartMoneyAnalysis, technicalAnalysis);
+    const confidence = thesis.scores?.confidence || 50;
+    const riskAnalysis = brain.riskAnalyzer.analyze(smcAnalysis, smartMoneyAnalysis, accountState, tradeDir, patternKey, confidence);
     if (riskAnalysis.approved && trader.positions.length < config.maxConcurrentPositions) {
       thesis.risk = riskAnalysis;
       const position = trader.openPosition(thesis, riskAnalysis);

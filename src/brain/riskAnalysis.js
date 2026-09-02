@@ -7,22 +7,25 @@
  */
 
 export class RiskAnalyzer {
-  constructor(config = null) {
+  constructor(config = null, memory = null) {
     this.config = config || {
       riskPerTradePct: 1.0,
       initialStoplossPct: 3.0,
-      tp1Pct: 3.0,
-      minRR: 1.5,
+      tp1Pct: 1.5,
+      minRR: 1.0,
       maxOpenPositions: 5,
       maxRiskPerSymbolPct: 3.0,
       maxDailyLossPct: 6.0,
+      maxLeverage: 10,
     };
+    this.memory = memory;
   }
 
   /**
    * Analyze risk for a potential trade.
+   * Uses learned sizing from memory if available.
    */
-  analyze(smcAnalysis, smartMoneyAnalysis, accountState, tradeDirection = null) {
+  analyze(smcAnalysis, smartMoneyAnalysis, accountState, tradeDirection = null, patternKey = null, confidence = 50) {
     const balance = accountState?.balance || 10000;
     const openPositions = accountState?.openPositions || [];
     const dailyPnL = accountState?.dailyPnL || 0;
@@ -62,7 +65,7 @@ export class RiskAnalyzer {
       .filter((p) => p.symbol === smcAnalysis.symbol)
       .reduce((sum, p) => sum + p.riskUSD, 0);
 
-    const newRiskUSD = (balance * this.config.riskPerTradePct) / 100;
+    const newRiskUSD = (balance * (this.memory ? (this.memory.getSizingForPattern(patternKey || '', confidence).riskPct) : this.config.riskPerTradePct)) / 100;
     const totalSymbolRisk = symbolRisk + newRiskUSD;
     const totalSymbolRiskPct = (totalSymbolRisk / balance) * 100;
 
@@ -72,8 +75,20 @@ export class RiskAnalyzer {
       return result;
     }
 
-    // ── Calculate position size ──────────────────────────────
-    result.riskUSD = newRiskUSD;
+    // ── Calculate position size with learned sizing ────────
+    let riskPct = this.config.riskPerTradePct;
+    let leverage = 3; // Default leverage
+
+    // Get learned sizing from memory
+    if (this.memory && patternKey) {
+      const sizing = this.memory.getSizingForPattern(patternKey, confidence);
+      riskPct = sizing.riskPct;
+      leverage = sizing.leverage;
+    }
+
+    result.leverage = leverage;
+    result.riskUSD = (balance * riskPct) / 100;
+    result.riskPct = riskPct;
     result.stopLossPct = this.config.initialStoplossPct;
     result.stopLossPrice = this._calcStopLoss(smcAnalysis, effectiveDir);
     result.tp1Price = this._calcTP1(smcAnalysis, effectiveDir);
