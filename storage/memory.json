@@ -1,0 +1,361 @@
+{
+  "trades": [
+    {
+      "id": "66458a66-1792-44de-9447-095fe03fd564",
+      "symbol": "SOLUSDT",
+      "direction": "BULLISH",
+      "entryPrice": 212.865833,
+      "exitPrice": 204.806614902,
+      "entryTime": 1788346863741,
+      "exitTime": 1788346863743,
+      "pnlPct": 3.786055274544695,
+      "pnlUsd": 100,
+      "result": "WIN",
+      "thesis": "Price engineered a bearish liquidity grab below the previous low. Large accounts are net-long (53.3% long). Taker flow is positive. Unfilled bullish FVG provides target.",
+      "thesisDirection": "BULLISH",
+      "smcSummary": "BULLISH",
+      "smartMoneySummary": "BULLISH",
+      "managementActions": [],
+      "exitReason": "INITIAL_STOPLOSS",
+      "pattern": "SOLUSDT|BULLISH|BULLISH|BULLISH",
+      "durationMin": 0
+    },
+    {
+      "id": "42144f1a-ee2d-4afd-bdf4-3e1ad0ecbf32",
+      "symbol": "ETHUSDT",
+      "direction": "BEARISH",
+      "entryPrice": 3057.085239,
+      "exitPrice": 3153.4348381140003,
+      "entryTime": 1788346863740,
+      "exitTime": 1788347663509,
+      "pnlPct": -3.1516818008488734,
+      "pnlUsd": -100,
+      "result": "LOSS",
+      "thesis": "Structure subsequently broke bearish. Bearish retest held. Large accounts are net-short (58.5% short). Unfilled bearish FVG provides target.",
+      "thesisDirection": "BEARISH",
+      "smcSummary": "BEARISH",
+      "smartMoneySummary": "BEARISH",
+      "managementActions": [],
+      "exitReason": "INITIAL_STOPLOSS",
+      "pattern": "ETHUSDT|BEARISH|BEARISH|BEARISH",
+      "durationMin": 13
+    },
+    {
+      "id": "2592d306-2142-4029-ac72-e5972dc1781d",
+      "symbol": "BTCUSDT",
+      "direction": "BULLISH",
+      "entryPrice": 85622.778432,
+      "exitPrice": 81433.393911828,
+      "entryTime": 1788347663505,
+      "exitTime": 1788347663509,
+      "pnlPct": 4.892838794642877,
+      "pnlUsd": 101,
+      "result": "WIN",
+      "thesis": "Large accounts are net-long (54.1% long). Taker flow is positive. Unfilled bullish FVG provides target. Technical engine confirms: 3 of 6 signals align bullish. However, 1 technical contradiction(s) detected.",
+      "thesisDirection": "BULLISH",
+      "smcSummary": "NEUTRAL",
+      "smartMoneySummary": "BULLISH",
+      "managementActions": [],
+      "exitReason": "INITIAL_STOPLOSS",
+      "pattern": "BTCUSDT|BULLISH|NEUTRAL|BULLISH",
+      "durationMin": 0
+    },
+    {
+      "id": "db43ece0-e5b7-4662-b0cb-326d1ac42d2f",
+      "symbol": "SOLUSDT",
+      "direction": "BULLISH",
+      "entryPrice": 160.434018,
+      "exitPrice": 157.376475282,
+      "entryTime": 1788347663508,
+      "exitTime": 1788347663509,
+      "pnlPct": 1.9057945167215145,
+      "pnlUsd": 101,
+      "result": "WIN",
+      "thesis": "Unfilled bullish FVG provides target. Technical engine confirms: 5 of 6 signals align bullish. However, 1 technical contradiction(s) detected.",
+      "thesisDirection": "BULLISH",
+      "smcSummary": "BULLISH",
+      "smartMoneySummary": "NEUTRAL",
+      "managementActions": [],
+      "exitReason": "INITIAL_STOPLOSS",
+      "pattern": "SOLUSDT|BULLISH|BULLISH|NEUTRAL",
+      "durationMin": 0
+    },
+    {
+      "id": "f595b41b-c82f-4353-8995-0abc573a39ca",
+      "symbol": "BNBUSDT",
+      "direction": "BULLISH",
+      "entryPrice": 570.897525,
+      "exitPrice": 552.021004482,
+      "entryTime": 1788347663508,
+      "exitTime": 1788347663509,
+      "pnlPct": 3.3064638908707837,
+      "pnlUsd": 101,
+      "result": "WIN",
+      "thesis": "Price engineered a bearish liquidity grab below the previous low. Unfilled bullish FVG provides target. Technical engine confirms: 3 of 6 signals align bullish.",
+      "thesisDirection": "BULLISH",
+      "smcSummary": "BULLISH",
+      "smartMoneySummary": "NEUTRAL",
+      "managementActions": [],
+      "exitReason": "INITIAL_STOPLOSS",
+      "pattern": "BNBUSDT|BULLISH|BULLISH|NEUTRAL",
+      "durationMin": 0
+    },
+    {
+      "id": "5537ac57-9c93-491c-b88c-51898ab4a9f5",
+      "symbol": "BNBUSDT",
+      "direction": "BEARISH",
+      "entryPrice": 602.7457,
+      "exitPrice": 573.7520126249999,
+      "entryTime": 1788346863741,
+      "exitTime": 1788347678321,
+      "pnlPct": 4.810268638166999,
+      "pnlUsd": 234.89393142282415,
+      "result": "WIN",
+      "thesis": "Price engineered a bullish liquidity grab above the previous high. Unfilled bearish FVG provides target.",
+      "thesisDirection": "BEARISH",
+      "smcSummary": "BEARISH",
+      "smartMoneySummary": "NEUTRAL",
+      "managementActions": [
+        {
+          "type": "TP1_HIT",
+          "time": 1788347663509,
+          "price": 570.897525,
+          "sellSize": 2092.7901396999687,
+          "pnlUSD": 110.57987905585924,
+          "pnlPct": 5.283849391210933
+        },
+        {
+          "type": "BREAKEVEN_SET",
+          "time": 1788347663509,
+          "price": 602.7457
+        },
+        {
+          "type": "TRAILING_ACTIVATED",
+          "time": 1788347663509,
+          "price": 570.897525
+        },
+        {
+          "type": "TRAIL_UPDATED",
+          "time": 1788347663509,
+          "newStop": 573.7520126249999,
+          "lowWater": 570.897525
+        }
+      ],
+      "exitReason": "TRAILING_STOP",
+      "pattern": "BNBUSDT|BEARISH|BEARISH|NEUTRAL",
+      "durationMin": 14
+    },
+    {
+      "id": "eedfa938-cb28-4ec0-91f8-98a40f568074",
+      "symbol": "ETHUSDT",
+      "direction": "BULLISH",
+      "entryPrice": 3656.350977,
+      "exitPrice": 3549.215156376,
+      "entryTime": 1788347678318,
+      "exitTime": 1788347678321,
+      "pnlPct": 2.9301295553389153,
+      "pnlUsd": 104.13579879055858,
+      "result": "WIN",
+      "thesis": "Bullish displacement followed. Structure subsequently broke bullish. Large accounts are net-long (53.4% long). Taker flow is positive. Funding environment is supportive. Unfilled bullish FVG provides target. Technical engine confirms: 6 of 6 signals align bullish. However, 1 technical contradiction(s) detected.",
+      "thesisDirection": "BULLISH",
+      "smcSummary": "BULLISH",
+      "smartMoneySummary": "BULLISH",
+      "managementActions": [],
+      "exitReason": "INITIAL_STOPLOSS",
+      "pattern": "ETHUSDT|BULLISH|BULLISH|BULLISH",
+      "durationMin": 0
+    },
+    {
+      "id": "5537ac57-9c93-491c-b88c-51898ab4a9f5",
+      "symbol": "BNBUSDT",
+      "direction": "BEARISH",
+      "entryPrice": 602.7457,
+      "exitPrice": 573.7520126249999,
+      "entryTime": 1788346863741,
+      "exitTime": 1788347678321,
+      "pnlPct": 4.810268638166999,
+      "pnlUsd": 234.89393142282415,
+      "result": "WIN",
+      "thesis": "Price engineered a bullish liquidity grab above the previous high. Unfilled bearish FVG provides target.",
+      "thesisDirection": "BEARISH",
+      "smcSummary": "BEARISH",
+      "smartMoneySummary": "NEUTRAL",
+      "managementActions": [
+        {
+          "type": "TP1_HIT",
+          "time": 1788347663509,
+          "price": 570.897525,
+          "sellSize": 2092.7901396999687,
+          "pnlUSD": 110.57987905585924,
+          "pnlPct": 5.283849391210933
+        },
+        {
+          "type": "BREAKEVEN_SET",
+          "time": 1788347663509,
+          "price": 602.7457
+        },
+        {
+          "type": "TRAILING_ACTIVATED",
+          "time": 1788347663509,
+          "price": 570.897525
+        },
+        {
+          "type": "TRAIL_UPDATED",
+          "time": 1788347663509,
+          "newStop": 573.7520126249999,
+          "lowWater": 570.897525
+        }
+      ],
+      "exitReason": "TRAILING_STOP",
+      "pattern": "BNBUSDT|BEARISH|BEARISH|NEUTRAL",
+      "durationMin": 14
+    },
+    {
+      "id": "52298058-98b5-437c-a72f-6aaeb535aaa1",
+      "symbol": "XRPUSDT",
+      "direction": "BULLISH",
+      "entryPrice": 3.01926,
+      "exitPrice": 2.814966784,
+      "entryTime": 1788347678321,
+      "exitTime": 1788347678321,
+      "pnlPct": 6.76633400237144,
+      "pnlUsd": 104.13579879055858,
+      "result": "WIN",
+      "thesis": "Large accounts are net-long (55.4% long). Taker flow is positive. Unfilled bullish FVG provides target. Technical engine diverges: only 1 signal(s) align with thesis.",
+      "thesisDirection": "BULLISH",
+      "smcSummary": "BULLISH",
+      "smartMoneySummary": "BULLISH",
+      "managementActions": [],
+      "exitReason": "INITIAL_STOPLOSS",
+      "pattern": "XRPUSDT|BULLISH|BULLISH|BULLISH",
+      "durationMin": 0
+    }
+  ],
+  "patterns": {
+    "SOLUSDT|BULLISH|BULLISH|BULLISH": {
+      "sampleSize": 1,
+      "wins": 1,
+      "losses": 0,
+      "totalPnL": 3.786055274544695,
+      "winRate": 100,
+      "avgPnL": 3.79,
+      "notes": "",
+      "trades": [
+        "66458a66-1792-44de-9447-095fe03fd564"
+      ]
+    },
+    "ETHUSDT|BEARISH|BEARISH|BEARISH": {
+      "sampleSize": 1,
+      "wins": 0,
+      "losses": 1,
+      "totalPnL": -3.1516818008488734,
+      "winRate": 0,
+      "avgPnL": -3.15,
+      "notes": "",
+      "trades": [
+        "42144f1a-ee2d-4afd-bdf4-3e1ad0ecbf32"
+      ]
+    },
+    "BTCUSDT|BULLISH|NEUTRAL|BULLISH": {
+      "sampleSize": 1,
+      "wins": 1,
+      "losses": 0,
+      "totalPnL": 4.892838794642877,
+      "winRate": 100,
+      "avgPnL": 4.89,
+      "notes": "",
+      "trades": [
+        "2592d306-2142-4029-ac72-e5972dc1781d"
+      ]
+    },
+    "SOLUSDT|BULLISH|BULLISH|NEUTRAL": {
+      "sampleSize": 1,
+      "wins": 1,
+      "losses": 0,
+      "totalPnL": 1.9057945167215145,
+      "winRate": 100,
+      "avgPnL": 1.91,
+      "notes": "",
+      "trades": [
+        "db43ece0-e5b7-4662-b0cb-326d1ac42d2f"
+      ]
+    },
+    "BNBUSDT|BULLISH|BULLISH|NEUTRAL": {
+      "sampleSize": 1,
+      "wins": 1,
+      "losses": 0,
+      "totalPnL": 3.3064638908707837,
+      "winRate": 100,
+      "avgPnL": 3.31,
+      "notes": "",
+      "trades": [
+        "f595b41b-c82f-4353-8995-0abc573a39ca"
+      ]
+    },
+    "BNBUSDT|BEARISH|BEARISH|NEUTRAL": {
+      "sampleSize": 2,
+      "wins": 2,
+      "losses": 0,
+      "totalPnL": 9.620537276333998,
+      "winRate": 100,
+      "avgPnL": 4.81,
+      "notes": "",
+      "trades": [
+        "5537ac57-9c93-491c-b88c-51898ab4a9f5",
+        "5537ac57-9c93-491c-b88c-51898ab4a9f5"
+      ]
+    },
+    "ETHUSDT|BULLISH|BULLISH|BULLISH": {
+      "sampleSize": 1,
+      "wins": 1,
+      "losses": 0,
+      "totalPnL": 2.9301295553389153,
+      "winRate": 100,
+      "avgPnL": 2.93,
+      "notes": "",
+      "trades": [
+        "eedfa938-cb28-4ec0-91f8-98a40f568074"
+      ]
+    },
+    "XRPUSDT|BULLISH|BULLISH|BULLISH": {
+      "sampleSize": 1,
+      "wins": 1,
+      "losses": 0,
+      "totalPnL": 6.76633400237144,
+      "winRate": 100,
+      "avgPnL": 6.77,
+      "notes": "",
+      "trades": [
+        "52298058-98b5-437c-a72f-6aaeb535aaa1"
+      ]
+    }
+  },
+  "managementRules": {
+    "tp1Pct": 3,
+    "tp1SellPct": 30,
+    "breakevenAfterTP1": true,
+    "trailingStartPct": 2,
+    "trailingStepPct": 0.5,
+    "maxTrailingDistancePct": 3,
+    "trailingSensitivity": 1,
+    "adjustments": [
+      {
+        "timestamp": 1788347663510,
+        "tradeId": "42144f1a-ee2d-4afd-bdf4-3e1ad0ecbf32",
+        "result": "LOSS",
+        "pnlPct": -3.1516818008488734,
+        "observations": [
+          "Full stop before TP1 — initial stoploss may be too tight for this pattern"
+        ]
+      }
+    ]
+  },
+  "learningStats": {
+    "totalTrades": 9,
+    "wins": 8,
+    "losses": 1,
+    "totalPnL": 981.06,
+    "avgWinPct": 4.15,
+    "avgLossPct": -3.15
+  }
+}
