@@ -139,12 +139,7 @@ export function renderScoreCard(opp) {
     L.push(kv('Order Book', `${ob.direction} (${(ob.imbalance * 100).toFixed(0)}% bid)`));
     L.push(kv('Bid/Ask Vol', `${ob.totalBidVolume} / ${ob.totalAskVolume}`));
   }
-  // Whale trades
-  if (smc.whaleTrades) {
-    const wt = smc.whaleTrades;
-    L.push(kv('Whale Trades', `${wt.largeTradeCount} large (${wt.largeBuys}B / ${wt.largeSells}S)`));
-    L.push(kv('Whale Flow', `${wt.direction} (net ${wt.netFlow})`));
-  }
+  // Whale trades — shown in Smart Money section, not here
   L.push(line());
 
   // ── BREAKOUT / TRAP ──────────────────────────────────────
@@ -210,7 +205,7 @@ export function renderScoreCard(opp) {
     if (sm.whaleFlow?.detected) {
       const wf = sm.whaleFlow;
       L.push(kv('Whale Flow', `${wf.whaleBuys}B / ${wf.whaleSells}S (${wf.direction}, ${wf.strength}%)`, biasC(wf.direction)));
-      L.push(kv('Whale Volume', `$\${(wf.totalWhaleVolume / 1000).toFixed(1)}K (threshold: $\${(wf.threshold / 1000).toFixed(1)}K)`));
+      L.push(kv('Whale Volume', `$${(wf.totalWhaleVolume / 1000).toFixed(1)}K (threshold: $${(wf.threshold / 1000).toFixed(1)}K)`));
     }
     if (sm.orderBook?.direction) {
       L.push(kv('Order Book', `${sm.orderBook.direction} (${(sm.orderBook.imbalance * 100).toFixed(0)}% bid)`, biasC(sm.orderBook.direction)));
@@ -239,8 +234,26 @@ export function renderScoreCard(opp) {
   if (sm?.fusion) L.push(kv('Smart Money', bar(sm.fusion.strength || 0)));
   if (tech?.volatility?.direction === 'EXPANDING') L.push(kv('Squeeze', bar(90)));
 
-  const bullPct = Math.round((opp.supporting?.filter(e => e.direction !== 'BEARISH').length || 0) / Math.max(1, (opp.supporting?.length || 1)) * 100);
-  const bearPct = 100 - bullPct;
+  // Calculate bull vs bear evidence from the thesis direction
+  const thesisDir = opp.conclusion?.direction || 'NEUTRAL';
+  const supportingForThesis = opp.supporting?.length || 0;
+  const contradictingAgainst = opp.contradicting?.length || 0;
+  // Bull evidence = supporting items if thesis is BULLISH + contradicting if thesis is BEARISH
+  let bullEvidence = 0;
+  let bearEvidence = 0;
+  if (thesisDir === 'BULLISH') {
+    bullEvidence = supportingForThesis;
+    bearEvidence = contradictingAgainst;
+  } else if (thesisDir === 'BEARISH') {
+    bearEvidence = supportingForThesis;
+    bullEvidence = contradictingAgainst;
+  } else {
+    bullEvidence = Math.round(supportingForThesis / 2);
+    bearEvidence = supportingForThesis - bullEvidence;
+  }
+  const totalEvidence = bullEvidence + bearEvidence;
+  const bullPct = totalEvidence > 0 ? Math.round((bullEvidence / totalEvidence) * 100) : 50;
+  const bearPct = totalEvidence > 0 ? 100 - bullPct : 50;
   L.push('');
   L.push(`  ${C.brightGreen}Bull Evidence ${bullPct}%${C.reset}  ${C.brightRed}Bear Evidence ${bearPct}%${C.reset}`);
   L.push(`  ${C.dim}Conflict${C.reset} ${conflict < 20 ? C.brightGreen + 'LOW' : conflict < 40 ? C.brightYellow + 'MEDIUM' : C.brightRed + 'HIGH'}${C.reset}`);

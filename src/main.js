@@ -130,10 +130,18 @@ async function analyzeSymbol(symbol, snapshot, scanStart, opportunities, current
     }
   }
 
-  // Thesis invalidation
+  // Thesis invalidation — only after minimum hold period (5 minutes)
   const hasOpenPos = trader.positions.find((p) => p.symbol === symbol);
   if (hasOpenPos && thesis.conclusion.decision === 'REJECT') {
-    thesisUpdates[symbol] = thesis;
+    const holdTimeMs = Date.now() - hasOpenPos.entryTime;
+    const minHoldMs = 5 * 60 * 1000; // 5 minutes minimum hold
+    if (holdTimeMs < minHoldMs) {
+      // Too early to invalidate — let the stop loss / TP1 manage the trade
+      // Don't send thesis update
+    } else {
+      thesisUpdates[symbol] = thesis;
+      addLog(`📋 Thesis invalidated for ${symbol} after ${Math.round(holdTimeMs / 60000)}min`);
+    }
   }
 }
 
