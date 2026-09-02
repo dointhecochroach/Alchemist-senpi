@@ -205,8 +205,16 @@ export function renderScoreCard(opp) {
   // ── SMART MONEY ──────────────────────────────────────────
   L.push(section('🐋 SMART MONEY'));
   if (sm) {
-    L.push(kv('Whale Bias', `${sm.topTraders?.bias?.toFixed(2) || 'N/A'} ${sm.topTraders?.direction === 'BEARISH' ? '🔴' : sm.topTraders?.direction === 'BULLISH' ? '🟢' : '⚪'}`, biasC(sm.topTraders?.direction)));
-    L.push(kv('Top Trader Bias', `${sm.topTraders?.longPct || 0}%L / ${sm.topTraders?.shortPct || 0}%S`, biasC(sm.topTraders?.direction)));
+    L.push(kv('Whale Bias', `${sm.topTraders?.compositeBias?.toFixed(2) || sm.topTraders?.bias?.toFixed(2) || 'N/A'} ${sm.topTraders?.direction === 'BEARISH' ? '🔴' : sm.topTraders?.direction === 'BULLISH' ? '🟢' : '⚪'}`, biasC(sm.topTraders?.direction)));
+    L.push(kv('Top Trader Bias', `${sm.topTraders?.longPct || 0}%L / ${sm.topTraders?.shortPct || 0}%S (composite)`, biasC(sm.topTraders?.direction)));
+    if (sm.whaleFlow?.detected) {
+      const wf = sm.whaleFlow;
+      L.push(kv('Whale Flow', `${wf.whaleBuys}B / ${wf.whaleSells}S (${wf.direction}, ${wf.strength}%)`, biasC(wf.direction)));
+      L.push(kv('Whale Volume', `$\${(wf.totalWhaleVolume / 1000).toFixed(1)}K (threshold: $\${(wf.threshold / 1000).toFixed(1)}K)`));
+    }
+    if (sm.orderBook?.direction) {
+      L.push(kv('Order Book', `${sm.orderBook.direction} (${(sm.orderBook.imbalance * 100).toFixed(0)}% bid)`, biasC(sm.orderBook.direction)));
+    }
     L.push(kv('Smart Money', `${sm.fusion?.direction || 'N/A'} (${sm.fusion?.strength || 0}%)`, biasC(sm.fusion?.direction)));
     L.push(kv('Flow Alignment', sm.fusion?.flowAlignment || 'N/A', sm.fusion?.flowAlignment === 'STRONG' ? C.brightGreen : sm.fusion?.flowAlignment === 'MODERATE' ? C.brightYellow : C.dim));
   }

@@ -2,22 +2,199 @@
  * Alchemist Brain — Smart Money Module
  *
  * Analyzes what large/informed market participants are doing.
- * Uses Binance public derivatives data as a proxy for smart money positioning.
  *
- * Data sources (all public, no API keys):
- *   - Top Trader Long/Short Position Ratio (whale proxy)
+ * Data sources (all Binance public, no keys):
+ *   - Top Trader Long/Short Position Ratio (position-weighted)
+ *   - Top Trader Long/Short Account Ratio (account-weighted)
  *   - Global Long/Short Account Ratio (retail sentiment)
  *   - Open Interest + changes (positioning flow)
  *   - Funding Rate (cost of holding positions)
  *   - Taker Buy/Sell Volume (aggressive order flow)
+ *   - Aggregate Trades (whale trade detection)
+ *   - Order Book depth (liquidity walls)
  *
- * Note: Binance doesn't expose per-wallet whale data publicly.
- * We use top trader position ratios as the closest proxy, combined
- * with OI/funding/taker flow to build a complete smart money picture.
+ * Whale detection thresholds:
+ *   - $25,000 minimum trade size baseline
+ *   - 24h volume fraction (relative significance)
+ *   - 95th percentile trade-size detection
+ *   - Minimum directional imbalance
  */
 
 // ──────────────────────────────────────────────────────────────
 //  WHALE / TOP TRADER ANALYSIS
+// ──────────────────────────────────────────────────────────────
+
+// Whale detection thresholds
+const WHALE_MIN_USD = 25000;        // $25k minimum baseline
+const WHALE_VOLUME_FRACTION = 0.001; // 0.1% of 24h volume
+const WHALE_PERCENTILE = 95;       // 95th percentile trade size
+const WHALE_MIN_IMBALANCE = 0.15;  // 15% minimum directional imbalance
+
+/**
+ * Analyze top trader positioning combining BOTH:
+ *   - Account ratio (topLongShortAccountRatio) — how many accounts
+ *   - Position ratio (topLongShortPositionRatio) — position sizes
+ * This gives a composite view = top trader composite.
+ */
+export function analyzeTopTraderComposite(topTraderPosition, topTraderAccount) {
+  const result = {
+    accountBias: 0,
+    positionBias: 0,
+    compositeBias: 0,
+    direction: 'NEUTRAL',
+    longPct: 50,
+    shortPct: 50,
+    positionLongPct: 50,
+    positionShortPct: 50,
+    changes: [],
+    divergence: 0,
+  };
+
+  // Account ratio (how many top trader accounts are long vs short)
+  if (topTraderAccount && topTraderAccount.length > 0) {
+    const latest = topTraderAccount[topTraderAccount.length - 1];
+    result.longPct = parseFloat((latest.longAccount * 100).toFixed(1));
+    result.shortPct = parseFloat((latest.shortAccount * 100).toFixed(1));
+    result.accountBias = clamp((latest.longShortRatio - 1) / (latest.longShortRatio + 1) * 2, -1, 1);
+  }
+
+  // Position ratio (position size weighted)
+  if (topTraderPosition && topTraderPosition.length > 0) {
+    const latest = topTraderPosition[topTraderPosition.length - 1];
+    result.positionLongPct = parseFloat((latest.longAccount * 100).toFixed(1));
+    result.positionShortPct = parseFloat((latest.shortAccount * 100).toFixed(1));
+    result.positionBias = clamp((latest.longShortRatio - 1) / (latest.longShortRatio + 1) * 2, -1, 1);
+
+    // Detect position changes
+    const lookback = Math.min(5, topTraderPosition.length - 1);
+    if (lookback > 0) {
+      const older = topTraderPosition[topTraderPosition.length - 1 - lookback];
+      const longChange = latest.longAccount - older.longAccount;
+      const shortChange = latest.shortAccount - older.shortAccount;
+      if (longChange > 0.01) result.changes.push({ type: 'INCREASING_LONG', value: longChange });
+      if (shortChange > 0.01) result.changes.push({ type: 'INCREASING_SHORT', value: shortChange });
+      if (longChange < -0.01) result.changes.push({ type: 'DECREASING_LONG', value: longChange });
+      if (shortChange < -0.01) result.changes.push({ type: 'DECREASING_SHORT', value: shortChange });
+    }
+  }
+
+  // Composite = weighted blend (position ratio is more meaningful — it's size-weighted)
+  result.compositeBias = (result.accountBias * 0.4 + result.positionBias * 0.6);
+  result.direction = result.compositeBias > 0.1 ? 'BULLISH' : result.compositeBias < -0.1 ? 'BEARISH' : 'NEUTRAL';
+
+  return result;
+}
+
+/**
+ * Detect whale trades from aggregate trade data.
+ * Uses multiple thresholds:
+ *   - $25,000 minimum USD size
+ *   - 0.1% of 24h quote volume (relative significance)
+ *   - 95th percentile of trade sizes in the batch
+ *   - Minimum 15% directional imbalance
+ */
+export function analyzeWhaleFlow(aggTrades, ticker24h) {
+  if (!aggTrades || aggTrades.length === 0) {
+    return {
+      detected: false,
+      whaleTrades: [],
+      whaleBuys: 0,
+      whaleSells: 0,
+      netFlow: 0,
+      direction: 'NEUTRAL',
+      strength: 0,
+      totalWhaleVolume: 0,
+    };
+  }
+
+  // Calculate thresholds
+  const quoteVolume = ticker24h?.quoteVolume24h || 0;
+  const volumeThreshold = quoteVolume * WHALE_VOLUME_FRACTION;
+  const usdThreshold = Math.max(WHALE_MIN_USD, volumeThreshold);
+
+  // Calculate 95th percentile trade size
+  const tradeSizes = aggTrades.map((t) => t.quantity * t.price).sort((a, b) => a - b);
+  const p95Index = Math.floor(tradeSizes.length * WHALE_PERCENTILE / 100);
+  const p95Threshold = tradeSizes[p95Index] || 0;
+
+  // A trade is "whale" if it exceeds ANY threshold
+  const whaleTrades = aggTrades.filter((t) => {
+    const usdValue = t.quantity * t.price;
+    return usdValue >= usdThreshold || usdValue >= p95Threshold;
+  });
+
+  // Separate buys vs sells
+  // isBuyerMaker = true means the buyer is the maker (taker is selling)
+  // isBuyerMaker = false means the seller is the maker (taker is buying)
+  const whaleBuys = whaleTrades.filter((t) => !t.isBuyerMaker);
+  const whaleSells = whaleTrades.filter((t) => t.isBuyerMaker);
+
+  const buyVolume = whaleBuys.reduce((s, t) => s + t.quantity * t.price, 0);
+  const sellVolume = whaleSells.reduce((s, t) => s + t.quantity * t.price, 0);
+  const totalVolume = buyVolume + sellVolume;
+  const netFlow = buyVolume - sellVolume;
+
+  // Directional imbalance
+  const imbalance = totalVolume > 0 ? Math.abs(netFlow) / totalVolume : 0;
+
+  // Only report whale signal if imbalance exceeds minimum
+  let direction = 'NEUTRAL';
+  let strength = 0;
+  if (imbalance >= WHALE_MIN_IMBALANCE && whaleTrades.length > 0) {
+    direction = netFlow > 0 ? 'BULLISH' : 'BEARISH';
+    strength = Math.min(100, Math.round(imbalance * 100));
+  }
+
+  return {
+    detected: whaleTrades.length > 0,
+    whaleTrades: whaleTrades.slice(0, 10).map((t) => ({
+      price: t.price,
+      quantity: t.quantity,
+      usdValue: parseFloat((t.quantity * t.price).toFixed(2)),
+      isBuy: !t.isBuyerMaker,
+      timestamp: t.timestamp,
+    })),
+    whaleBuys: whaleBuys.length,
+    whaleSells: whaleSells.length,
+    buyVolume: parseFloat(buyVolume.toFixed(2)),
+    sellVolume: parseFloat(sellVolume.toFixed(2)),
+    netFlow: parseFloat(netFlow.toFixed(2)),
+    direction,
+    strength,
+    imbalance: parseFloat(imbalance.toFixed(2)),
+    totalWhaleVolume: parseFloat(totalVolume.toFixed(2)),
+    threshold: parseFloat(usdThreshold.toFixed(2)),
+  };
+}
+
+/**
+ * Analyze order book for liquidity walls and bid/ask imbalance.
+ */
+export function analyzeOrderBookDepth(orderBook) {
+  if (!orderBook || !orderBook.bids || !orderBook.asks) {
+    return { direction: 'NEUTRAL', imbalance: 0.5, strength: 0 };
+  }
+
+  const bidVol = orderBook.bids.reduce((s, b) => s + b[1], 0);
+  const askVol = orderBook.asks.reduce((s, a) => s + a[1], 0);
+  const total = bidVol + askVol;
+  const imbalance = total > 0 ? bidVol / total : 0.5;
+
+  // Find largest walls
+  const largestBid = orderBook.bids.reduce((max, b) => b[1] > max[1] ? b : max, orderBook.bids[0]);
+  const largestAsk = orderBook.asks.reduce((max, a) => a[1] > max[1] ? a : max, orderBook.asks[0]);
+
+  return {
+    direction: imbalance > 0.55 ? 'BULLISH' : imbalance < 0.45 ? 'BEARISH' : 'NEUTRAL',
+    imbalance: parseFloat(imbalance.toFixed(2)),
+    strength: Math.min(100, Math.round(Math.abs(imbalance - 0.5) * 200)),
+    bidVolume: parseFloat(bidVol.toFixed(4)),
+    askVolume: parseFloat(askVol.toFixed(4)),
+    largestBidWall: largestBid ? { price: largestBid[0], volume: largestBid[1] } : null,
+    largestAskWall: largestAsk ? { price: largestAsk[0], volume: largestAsk[1] } : null,
+    spread: orderBook.asks[0] && orderBook.bids[0] ? orderBook.asks[0][0] - orderBook.bids[0][0] : 0,
+  };
+}
 // ──────────────────────────────────────────────────────────────
 
 /**
@@ -265,6 +442,13 @@ export function fuseSmartMoney(topTraderAnalysis, globalAnalysis, derivatives) {
  * Run complete smart money analysis from a market data snapshot.
  */
 export function analyzeSmartMoney(snapshot) {
+  // Use composite top trader analysis (account + position ratio)
+  const topTraderComposite = analyzeTopTraderComposite(
+    snapshot.topTraderLS,      // position ratio
+    snapshot.topTraderAccount  // account ratio (may be null)
+  );
+
+  // Also keep backward-compatible analysis
   const topTraderAnalysis = analyzeTopTraders(snapshot.topTraderLS, snapshot.globalLS);
   const globalAnalysis = analyzeGlobalPosition(snapshot.globalLS);
   const derivatives = analyzeDerivatives(
@@ -274,20 +458,43 @@ export function analyzeSmartMoney(snapshot) {
     snapshot.fundingHistory,
     snapshot.takerVolume
   );
+
+  // Whale flow from aggregate trades
+  const whaleFlow = analyzeWhaleFlow(snapshot.aggTrades, snapshot.ticker24h);
+
+  // Order book depth
+  const orderBook = analyzeOrderBookDepth(snapshot.orderBook);
+
   const fusion = fuseSmartMoney(topTraderAnalysis, globalAnalysis, derivatives);
+
+  // Integrate whale flow into fusion
+  if (whaleFlow.detected && whaleFlow.direction !== 'NEUTRAL') {
+    const whaleSignal = whaleFlow.direction === 'BULLISH' ? whaleFlow.strength / 100 : -(whaleFlow.strength / 100);
+    fusion.smartMoneyBias = clamp(fusion.smartMoneyBias + whaleSignal * 0.15, -1, 1);
+    fusion.direction = fusion.smartMoneyBias > 0.1 ? 'BULLISH' : fusion.smartMoneyBias < -0.1 ? 'BEARISH' : 'NEUTRAL';
+    fusion.strength = Math.min(100, Math.round(Math.abs(fusion.smartMoneyBias) * 100));
+  }
 
   // Evidence list for the Brain
   const evidence = [];
 
-  if (topTraderAnalysis.direction === 'BULLISH') {
-    evidence.push(`Top traders bullish (${topTraderAnalysis.longPct}% long)`);
-  } else if (topTraderAnalysis.direction === 'BEARISH') {
-    evidence.push(`Top traders bearish (${topTraderAnalysis.shortPct}% short)`);
+  if (topTraderComposite.direction === 'BULLISH') {
+    evidence.push(`Top traders bullish (composite: ${topTraderComposite.longPct}%L / ${topTraderComposite.shortPct}%S)`);
+  } else if (topTraderComposite.direction === 'BEARISH') {
+    evidence.push(`Top traders bearish (composite: ${topTraderComposite.longPct}%L / ${topTraderComposite.shortPct}%S)`);
   }
 
-  for (const change of topTraderAnalysis.changes) {
+  for (const change of topTraderComposite.changes) {
     if (change.type === 'INCREASING_LONG') evidence.push(`Top traders increasing long (+${(change.value * 100).toFixed(1)}%)`);
     if (change.type === 'INCREASING_SHORT') evidence.push(`Top traders increasing short (+${(change.value * 100).toFixed(1)}%)`);
+  }
+
+  if (whaleFlow.detected) {
+    evidence.push(`Whale flow: ${whaleFlow.whaleBuys} buys vs ${whaleFlow.whaleSells} sells (${whaleFlow.direction}, ${whaleFlow.strength}% strength)`);
+  }
+
+  if (orderBook.direction !== 'NEUTRAL') {
+    evidence.push(`Order book ${orderBook.direction.toLowerCase()} (${(orderBook.imbalance * 100).toFixed(0)}% bid)`);
   }
 
   if (derivatives.takerFlow.direction !== 'NEUTRAL') {
@@ -302,16 +509,19 @@ export function analyzeSmartMoney(snapshot) {
     evidence.push(`OI ${derivatives.openInterest.trend.toLowerCase()} (${derivatives.openInterest.changePct}%)`);
   }
 
-  if (topTraderAnalysis.divergence > 0.1) {
+  if (topTraderComposite.divergence > 0.1) {
     evidence.push(`Top traders diverge from retail (bullish edge)`);
-  } else if (topTraderAnalysis.divergence < -0.1) {
+  } else if (topTraderComposite.divergence < -0.1) {
     evidence.push(`Top traders diverge from retail (bearish edge)`);
   }
 
   return {
-    topTraders: topTraderAnalysis,
+    topTraders: topTraderComposite,
+    topTraderAnalysis, // backward compat
     global: globalAnalysis,
     derivatives,
+    whaleFlow,
+    orderBook,
     fusion,
     evidence,
     smartMoneyScore: fusion.strength,

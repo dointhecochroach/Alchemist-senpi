@@ -325,6 +325,20 @@ export class LiveDataClient {
     } catch { return []; }
   }
 
+  // ── Top Trader Account Ratio (separate from position ratio) ──
+  async getTopTraderAccountRatio(symbol, period = '15m', limit = 30) {
+    if (!this.futuresAvailable) return [];
+    try {
+      const raw = await this._rest('/futures/data/topLongShortAccountRatio', { symbol, period, limit });
+      return raw.map((r) => ({
+        timestamp: r.timestamp,
+        longShortRatio: parseFloat(r.longShortRatio),
+        longAccount: parseFloat(r.longAccount),
+        shortAccount: parseFloat(r.shortAccount),
+      }));
+    } catch { return []; }
+  }
+
   async getTakerVolume(symbol, period = '15m', limit = 30) {
     if (!this.futuresAvailable) return [];
     try {
@@ -697,7 +711,7 @@ export class LiveDataClient {
     // REST data — fetch concurrently
     const [
       openInterest, oiHistory, funding, fundingHistory,
-      topTraderLS, globalLS, takerVolume,
+      topTraderLS, topTraderAccount, globalLS, takerVolume,
       orderBook, aggTrades,
     ] = await Promise.allSettled([
       this.getOpenInterest(symbol),
@@ -705,6 +719,7 @@ export class LiveDataClient {
       this.getFundingRate(symbol),
       this.getFundingHistory(symbol, 30),
       this.getTopTraderLS(symbol, '15m', 30),
+      this.getTopTraderAccountRatio(symbol, '15m', 30),
       this.getGlobalLS(symbol, '15m', 30),
       this.getTakerVolume(symbol, '15m', 30),
       this.getOrderBook(symbol, 20),
@@ -734,6 +749,7 @@ export class LiveDataClient {
       funding: unwrap(funding),
       fundingHistory: unwrap(fundingHistory, []),
       topTraderLS: unwrap(topTraderLS, []),
+      topTraderAccount: unwrap(topTraderAccount, []),
       globalLS: unwrap(globalLS, []),
       takerVolume: unwrap(takerVolume, []),
       orderBook: unwrap(orderBook),
