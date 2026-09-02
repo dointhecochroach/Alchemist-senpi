@@ -1,24 +1,21 @@
 #!/usr/bin/env node
 
 /**
- * Alchemist Brain — Main Orchestration (Live Data + Paper Trading)
+ * Alchemist Brain — Paper Trading Bot
  *
- * Data flow:
- *   - WebSocket: real-time klines + tickers (no polling, no rate limit)
- *   - REST: periodic derivatives data (OI, funding, L/S ratios) every 5 min
- *   - Coin scanner: auto-picks top 15 by volume × volatility
- *   - Falls back to mock data if Binance is geo-blocked
+ * Uses REAL Binance public API data (no keys needed).
+ * WebSocket for real-time klines + tickers.
+ * REST for derivatives data (OI, funding, L/S ratios) every 30s.
+ * Coin scanner picks top 15 by volume × volatility every 30s.
+ * Paper trades with real market prices — no mock data.
  *
  * Usage:
- *   node src/main.js              — Live data (auto fallback to mock)
- *   node src/main.js --mock       — Force mock data
+ *   node src/main.js              — Start paper trading
  *   node src/main.js --debug      — Debug mode
  */
 
 import { config } from './config.js';
 import { LiveDataClient } from './data/liveDataClient.js';
-import { BinanceClient } from './data/binanceClient.js';
-import { MockDataGenerator } from './data/mockData.js';
 import { CoinScanner } from './data/coinScanner.js';
 import { analyzeSMC } from './smc/smcAnalyzer.js';
 import { analyzeSmartMoney } from './smart_money/smartMoneyAnalyzer.js';
@@ -31,22 +28,18 @@ import { appendFileSync } from 'fs';
 
 const args = process.argv.slice(2);
 const debug = args.includes('--debug');
-const forceMock = args.includes('--mock');
 if (debug) config.debug = true;
 
 // ── Components ───────────────────────────────────────────────
 const liveClient = new LiveDataClient();
-const mockGen = new MockDataGenerator();
 const memory = new Memory(config.memoryPath);
 const brain = new ThesisEngine(memory);
 const trader = new PaperTrader(config);
 const dashboard = new Dashboard();
-
 let scanner = null;
+
 let scanCount = 0;
 let running = true;
-let mockMode = forceMock;
-let mockSnapshots = null;
 let currentSymbols = [];
 let fetchingNext = false;
 
@@ -59,7 +52,6 @@ function addLog(msg) {
   const entry = `[${t}] ${msg}`;
   scanLog.push(entry);
   if (scanLog.length > 50) scanLog.shift();
-  // Write to log file for scrollback viewing
   try { appendFileSync(LOG_FILE, entry + '\n'); } catch {}
 }
 
@@ -67,31 +59,9 @@ function addLog(msg) {
 process.on('SIGINT', () => {
   running = false;
   dashboard.stop();
-  if (!mockMode) liveClient.disconnect();
+  liveClient.disconnect();
   setTimeout(() => process.exit(0), 500);
 });
-
-// ── Mock data helpers ────────────────────────────────────────
-function getMockSnapshots(symbols) {
-  if (!mockSnapshots) {
-    mockSnapshots = mockGen.generateAllSnapshots(symbols, config.timeframes, config.candleLimit);
-  } else {
-    mockSnapshots = mockGen.tickPrices(mockSnapshots);
-  }
-  return mockSnapshots;
-}
-
-function getMockScannerCoins(symbols) {
-  return symbols.map((s) => ({
-    symbol: s,
-    volume: 50_000_000 + Math.random() * 2_000_000_000,
-    volatility: 2 + Math.random() * 8,
-    price: 100 + Math.random() * 90000,
-    priceChangePct: (Math.random() - 0.5) * 10,
-    score: Math.random() * 1e9,
-    volumeStr: `$${(50 + Math.random() * 2000).toFixed(0)}M`,
-  })).sort((a, b) => b.score - a.score);
-}
 
 // ── Analyze one symbol ───────────────────────────────────────
 async function analyzeSymbol(symbol, snapshot, scanStart, opportunities, currentPrices, thesisUpdates) {
@@ -147,52 +117,43 @@ async function analyzeSymbol(symbol, snapshot, scanStart, opportunities, current
 
 // ── Main ─────────────────────────────────────────────────────
 async function main() {
-  // Single startup line — no waterfall
-  process.stdout.write('  🧪 ALCHEMIST BRAIN — Starting up...\n');
+  process.stdout.write('  🧪 ALCHEMIST BRAIN — Paper Trading (Real Data)\n');
 
-  if (forceMock) {
-    mockMode = true;
-    process.stdout.write('\r  🧪 ALCHEMIST BRAIN — MOCK (forced)         \n');
-  } else {
-    process.stdout.write('  Connecting to Binance...');
-    const ok = await liveClient.init();
-    if (ok) {
-      process.stdout.write('\r  🧪 ALCHEMIST BRAIN — ');
-      if (liveClient.futuresAvailable) {
-        process.stdout.write('LIVE (Futures + Spot)         \n');
-      } else if (liveClient.spotAvailable) {
-        process.stdout.write('LIVE (Spot only — futures blocked)   \n');
-      }
-      scanner = new CoinScanner(liveClient);
-    } else {
-      process.stdout.write('\r  🧪 ALCHEMIST BRAIN — MOCK (no API reachable)   \n');
-      mockMode = true;
-    }
+  // ── Connect to Binance ────────────────────────────────────
+  process.stdout.write('  Connecting to Binance API...');
+  const ok = await liveClient.init();
+
+  if (!ok) {
+    process.stdout.write('\n  ❌ Cannot reach Binance. Check your internet connection.\n');
+    process.stdout.write('  Make sure Binance is available in your region.\n');
+    process.exit(1);
   }
 
-  if (mockMode) {
-    scanner = new CoinScanner({ getExchangeInfo: async () => ({ symbols: [] }), getAllTickers24h: async () => [] });
+  if (liveClient.futuresAvailable) {
+    process.stdout.write('\r  🧪 ALCHEMIST BRAIN — LIVE DATA (Futures + Spot)    \n');
+  } else if (liveClient.spotAvailable) {
+    process.stdout.write('\r  🧪 ALCHEMIST BRAIN — LIVE DATA (Spot, futures blocked)    \n');
+  }
+
+  scanner = new CoinScanner(liveClient);
+
+  // ── Scan for top coins ────────────────────────────────────
+  process.stdout.write('  Scanning top coins...\r');
+  try {
+    await scanner.scanTopCoins();
+  } catch (e) {
+    addLog(`Scanner error: ${e.message}, using fallback coins`);
     scanner._fallbackCoins();
-    scanner.coins = getMockScannerCoins(config.symbols);
-  } else {
-    // ── Scan for top coins ────────────────────────────────────
-    try {
-      await scanner.scanTopCoins();
-    } catch (e) {
-      addLog(`Scanner error: ${e.message}, using fallback coins`);
-      scanner._fallbackCoins();
-    }
   }
   currentSymbols = scanner.coins.map((c) => c.symbol);
+  addLog(`📡 Tracking ${currentSymbols.length} coins: ${currentSymbols.join(', ')}`);
 
-  // ── Connect WebSocket (live mode) ─────────────────────────
-  if (!mockMode) {
-    try {
-      await liveClient.connectWebSocket(currentSymbols, config.timeframes);
-      addLog('📡 WebSocket connected — real-time data streaming');
-    } catch (e) {
-      addLog(`⚠️ WebSocket failed: ${e.message} — using REST for candles`);
-    }
+  // ── Connect WebSocket ─────────────────────────────────────
+  try {
+    await liveClient.connectWebSocket(currentSymbols, config.timeframes);
+    addLog('📡 WebSocket connected — real-time streaming');
+  } catch (e) {
+    addLog(`⚠️ WebSocket failed: ${e.message} — using REST polling`);
   }
 
   // ── Start dashboard ───────────────────────────────────────
@@ -206,7 +167,7 @@ async function main() {
     scanLog,
   });
 
-  // ── Derivatives refresh timer (every 30 sec in live mode) ───────
+  // ── Derivatives refresh (every 30s) ───────────────────────
   let lastDerivativesRefresh = 0;
   const DERIVATIVES_INTERVAL = 30 * 1000;
 
@@ -216,95 +177,77 @@ async function main() {
     const scanStart = Date.now();
 
     try {
-      // Periodic coin rescan (every 5 min)
+      // Periodic coin rescan (every 30s)
       if (scanCount > 1 && Date.now() - scanner.lastScan > scanner.scanIntervalMs && !fetchingNext) {
         fetchingNext = true;
-        if (!mockMode) {
-          scanner.scanTopCoins().then(() => {
-            const newSymbols = scanner.coins.map((c) => c.symbol);
-            // Subscribe to new symbols on WS
-            const added = newSymbols.filter((s) => !currentSymbols.includes(s));
-            const removed = currentSymbols.filter((s) => !newSymbols.includes(s));
-            if (added.length > 0 || removed.length > 0) {
-              addLog(`📡 Scanner updated: +${added.length} new, -${removed.length} removed`);
-              // Resubscribe WS
-              if (liveClient._wsConnected) {
-                // Unsubscribe removed
-                if (removed.length > 0) {
-                  const unsubs = removed.flatMap((s) => {
-                    const l = s.toLowerCase();
-                    return [...config.timeframes.map((tf) => `${l}@kline_${tf}`), `${l}@ticker`];
-                  });
-                  liveClient._ws.send(JSON.stringify({ method: 'UNSUBSCRIBE', params: unsubs, id: Date.now() }));
-                }
-                // Subscribe added
-                if (added.length > 0) {
-                  const subs = added.flatMap((s) => {
-                    const l = s.toLowerCase();
-                    return [...config.timeframes.map((tf) => `${l}@kline_${tf}`), `${l}@ticker`];
-                  });
-                  liveClient._ws.send(JSON.stringify({ method: 'SUBSCRIBE', params: subs, id: Date.now() }));
-                }
+        scanner.scanTopCoins().then(() => {
+          const newSymbols = scanner.coins.map((c) => c.symbol);
+          const added = newSymbols.filter((s) => !currentSymbols.includes(s));
+          const removed = currentSymbols.filter((s) => !newSymbols.includes(s));
+          if (added.length > 0 || removed.length > 0) {
+            addLog(`📡 Scanner updated: +${added.length} new, -${removed.length} removed`);
+            // Update WS subscriptions
+            if (liveClient._wsConnected) {
+              if (removed.length > 0) {
+                const unsubs = removed.flatMap((s) => {
+                  const l = s.toLowerCase();
+                  return [...config.timeframes.map((tf) => `${l}@kline_${tf}`), `${l}@ticker`];
+                });
+                try { liveClient._ws.send(JSON.stringify({ method: 'UNSUBSCRIBE', params: unsubs, id: Date.now() })); } catch {}
+              }
+              if (added.length > 0) {
+                const subs = added.flatMap((s) => {
+                  const l = s.toLowerCase();
+                  return [...config.timeframes.map((tf) => `${l}@kline_${tf}`), `${l}@ticker`];
+                });
+                try { liveClient._ws.send(JSON.stringify({ method: 'SUBSCRIBE', params: subs, id: Date.now() })); } catch {}
               }
             }
-            currentSymbols = newSymbols;
-            dashboard.update({ scanner: scanner.coins });
-            fetchingNext = false;
-          }).catch(() => { fetchingNext = false; });
-        } else {
-          scanner.coins = getMockScannerCoins(config.symbols);
-          currentSymbols = scanner.coins.map((c) => c.symbol);
+          }
+          currentSymbols = newSymbols;
           dashboard.update({ scanner: scanner.coins });
           fetchingNext = false;
-        }
+        }).catch(() => { fetchingNext = false; });
       }
 
-      // Fetch data
-      let snapshots;
-      if (mockMode) {
-        snapshots = getMockSnapshots(currentSymbols);
-      } else {
-        // Candles from WS cache, derivatives from REST (throttled)
-        const shouldRefreshDerivatives = Date.now() - lastDerivativesRefresh > DERIVATIVES_INTERVAL;
+      // Fetch data — candles from WS cache, derivatives from REST
+      const shouldRefreshDerivatives = Date.now() - lastDerivativesRefresh > DERIVATIVES_INTERVAL;
+      const snapshots = {};
 
-        snapshots = {};
-        for (const symbol of currentSymbols) {
-          try {
-            // Candles — from WS cache (instant, no API call)
+      for (const symbol of currentSymbols) {
+        try {
+          if (shouldRefreshDerivatives) {
+            // Full snapshot with REST derivatives
+            snapshots[symbol] = await liveClient.getSymbolSnapshot(symbol, config.timeframes);
+          } else {
+            // Just candles from WS cache + ticker
             const klines = {};
             for (const tf of config.timeframes) {
               klines[tf] = await liveClient.getCandles(symbol, tf, config.candleLimit);
             }
-
-            if (shouldRefreshDerivatives) {
-              // Full snapshot with REST derivatives
-              snapshots[symbol] = await liveClient.getSymbolSnapshot(currentSymbols.includes(symbol) ? symbol : symbol, config.timeframes);
-            } else {
-              // Just candles + cached ticker from WS
-              snapshots[symbol] = {
-                symbol,
-                timestamp: Date.now(),
-                klines,
-                openInterest: null,
-                oiHistory: [],
-                funding: null,
-                fundingHistory: [],
-                topTraderLS: [],
-                globalLS: [],
-                takerVolume: [],
-                ticker24h: liveClient.getTicker(symbol),
-              };
-            }
-          } catch (e) {
-            if (debug) addLog(`⚠️ ${symbol}: ${e.message}`);
-            snapshots[symbol] = null;
+            snapshots[symbol] = {
+              symbol,
+              timestamp: Date.now(),
+              klines,
+              openInterest: null,
+              oiHistory: [],
+              funding: null,
+              fundingHistory: [],
+              topTraderLS: [],
+              globalLS: [],
+              takerVolume: [],
+              ticker24h: liveClient.getTicker(symbol),
+            };
           }
+        } catch (e) {
+          if (debug) addLog(`⚠️ ${symbol}: ${e.message}`);
+          snapshots[symbol] = null;
         }
+      }
 
-        if (shouldRefreshDerivatives) {
-          lastDerivativesRefresh = Date.now();
-          addLog('🔄 Derivatives data refreshed (OI, funding, L/S ratios)');
-        }
+      if (shouldRefreshDerivatives) {
+        lastDerivativesRefresh = Date.now();
+        addLog('🔄 Derivatives refreshed (OI, funding, L/S ratios)');
       }
 
       // Analyze each symbol
@@ -347,22 +290,21 @@ async function main() {
       if (debug && scanCount % 10 === 0) {
         const scanTime = ((Date.now() - scanStart) / 1000).toFixed(1);
         const eCount = opportunities.filter((o) => o.conclusion.decision === 'ENTER').length;
-        addLog(`Scan #${scanCount} | ${scanTime}s | ${mockMode ? 'MOCK' : 'LIVE'} | E:${eCount}`);
+        addLog(`Scan #${scanCount} | ${scanTime}s | E:${eCount}`);
       }
 
-      // Small delay — 2 seconds in live mode (WS updates continuously),
-      // 3 seconds in mock mode (slower, more realistic)
-      await new Promise((r) => setTimeout(r, mockMode ? 3000 : 2000));
+      // 2 second delay between scans
+      await new Promise((r) => setTimeout(r, 2000));
 
     } catch (err) {
       if (debug) console.error('[Main]', err.message);
       addLog(`⚠️ Error: ${err.message}`);
-      await new Promise((r) => setTimeout(r, 2000));
+      await new Promise((r) => setTimeout(r, 3000));
     }
   }
 
   dashboard.stop();
-  if (!mockMode) liveClient.disconnect();
+  liveClient.disconnect();
   console.log('Alchemist Brain stopped.');
 }
 
