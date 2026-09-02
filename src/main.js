@@ -1,20 +1,22 @@
 #!/usr/bin/env node
 
 /**
- * Alchemist Brain — Main Orchestration Loop
+ * Alchemist Brain — Main Orchestration (Live Data + Paper Trading)
  *
- * - Continuously scans (never pauses — fetches next batch while analyzing current)
- * - Dynamically picks top 15 coins by volume × volatility
- * - Interactive TUI dashboard with [1-6] keyboard navigation
- * - Auto-buy when Brain says ENTER
+ * Data flow:
+ *   - WebSocket: real-time klines + tickers (no polling, no rate limit)
+ *   - REST: periodic derivatives data (OI, funding, L/S ratios) every 5 min
+ *   - Coin scanner: auto-picks top 15 by volume × volatility
+ *   - Falls back to mock data if Binance is geo-blocked
  *
  * Usage:
- *   node src/main.js              — Run (auto-falls back to mock data)
- *   node src/main.js --mock       — Force mock data mode
+ *   node src/main.js              — Live data (auto fallback to mock)
+ *   node src/main.js --mock       — Force mock data
  *   node src/main.js --debug      — Debug mode
  */
 
 import { config } from './config.js';
+import { LiveDataClient } from './data/liveDataClient.js';
 import { BinanceClient } from './data/binanceClient.js';
 import { MockDataGenerator } from './data/mockData.js';
 import { CoinScanner } from './data/coinScanner.js';
@@ -26,21 +28,20 @@ import { Memory } from './brain/memory.js';
 import { PaperTrader } from './execution/paperTrader.js';
 import { Dashboard } from './display/dashboard.js';
 
-// ── Parse CLI args ────────────────────────────────────────────
 const args = process.argv.slice(2);
 const debug = args.includes('--debug');
 const forceMock = args.includes('--mock');
 if (debug) config.debug = true;
 
-// ── Initialize components ─────────────────────────────────────
-const binance = new BinanceClient();
+// ── Components ───────────────────────────────────────────────
+const liveClient = new LiveDataClient();
 const mockGen = new MockDataGenerator();
-const scanner = new CoinScanner(binance);
 const memory = new Memory(config.memoryPath);
 const brain = new ThesisEngine(memory);
 const trader = new PaperTrader(config);
 const dashboard = new Dashboard();
 
+let scanner = null;
 let scanCount = 0;
 let running = true;
 let mockMode = forceMock;
@@ -48,57 +49,42 @@ let mockSnapshots = null;
 let currentSymbols = [];
 let fetchingNext = false;
 
+// ── Scan log ─────────────────────────────────────────────────
+const scanLog = [];
+function addLog(msg) {
+  const t = new Date().toUTCString().slice(17, 25);
+  scanLog.push(`[${t}] ${msg}`);
+  if (scanLog.length > 50) scanLog.shift();
+}
+
 // ── Graceful shutdown ────────────────────────────────────────
 process.on('SIGINT', () => {
-  console.log('\n\n🛑 Alchemist Brain shutting down...');
   running = false;
   dashboard.stop();
+  if (!mockMode) liveClient.disconnect();
   setTimeout(() => process.exit(0), 500);
 });
 
-// ── Data fetcher with fallback ───────────────────────────────
-async function fetchSnapshots(symbols) {
-  if (mockMode) {
-    if (!mockSnapshots) {
-      mockSnapshots = mockGen.generateAllSnapshots(symbols, config.timeframes, config.candleLimit);
-    } else {
-      mockSnapshots = mockGen.tickPrices(mockSnapshots);
-    }
-    return mockSnapshots;
+// ── Mock data helpers ────────────────────────────────────────
+function getMockSnapshots(symbols) {
+  if (!mockSnapshots) {
+    mockSnapshots = mockGen.generateAllSnapshots(symbols, config.timeframes, config.candleLimit);
+  } else {
+    mockSnapshots = mockGen.tickPrices(mockSnapshots);
   }
-
-  try {
-    const snapshots = await binance.getAllSnapshots(symbols, config.timeframes, config.candleLimit);
-    const allFailed = symbols.every((s) => !snapshots[s] || !snapshots[s].klines?.[config.primaryTF]?.length);
-    if (allFailed) {
-      if (debug) console.log('\n⚠️  Binance API unavailable. Switching to MOCK DATA mode.\n');
-      mockMode = true;
-      mockSnapshots = mockGen.generateAllSnapshots(symbols, config.timeframes, config.candleLimit);
-      return mockSnapshots;
-    }
-    return snapshots;
-  } catch (err) {
-    if (!mockMode) {
-      if (debug) console.log('\n⚠️  Binance API error. Switching to MOCK DATA mode.\n');
-      mockMode = true;
-      mockSnapshots = mockGen.generateAllSnapshots(symbols, config.timeframes, config.candleLimit);
-      return mockSnapshots;
-    }
-    throw err;
-  }
+  return mockSnapshots;
 }
 
-// ── Update symbols from scanner ──────────────────────────────
-async function updateSymbols() {
-  try {
-    const symbols = await scanner.getTopCoins();
-    if (symbols && symbols.length > 0) {
-      currentSymbols = symbols;
-      if (debug) console.log(`[Scanner] Tracking ${symbols.length} coins`);
-    }
-  } catch (e) {
-    if (debug) console.log(`[Scanner] Error: ${e.message}`);
-  }
+function getMockScannerCoins(symbols) {
+  return symbols.map((s) => ({
+    symbol: s,
+    volume: 50_000_000 + Math.random() * 2_000_000_000,
+    volatility: 2 + Math.random() * 8,
+    price: 100 + Math.random() * 90000,
+    priceChangePct: (Math.random() - 0.5) * 10,
+    score: Math.random() * 1e9,
+    volumeStr: `$${(50 + Math.random() * 2000).toFixed(0)}M`,
+  })).sort((a, b) => b.score - a.score);
 }
 
 // ── Analyze one symbol ───────────────────────────────────────
@@ -141,62 +127,72 @@ async function analyzeSymbol(symbol, snapshot, scanStart, opportunities, current
       thesis.risk = riskAnalysis;
       const position = trader.openPosition(thesis, riskAnalysis);
       if (position) {
-        const logMsg = `🟢 AUTO-BUY ${thesis.conclusion.direction} ${symbol} @ ${position.entryPrice} | Size: $${position.size.toFixed(2)} | SL: ${position.initialStopLoss.toFixed(2)} | TP1: ${position.takeProfit1.toFixed(2)}`;
-        if (debug) console.log(`[AUTO-BUY] ${thesis.conclusion.direction} ${symbol} @ ${position.entryPrice}`);
-        addScanLog(logMsg);
+        addLog(`🟢 AUTO-BUY ${thesis.conclusion.direction} ${symbol} @ ${position.entryPrice.toFixed(2)} | Size: $${position.size.toFixed(0)} | SL: ${position.initialStopLoss.toFixed(2)} | TP1: ${position.takeProfit1.toFixed(2)}`);
       }
     }
   }
 
-  // Thesis invalidation for open positions
+  // Thesis invalidation
   const hasOpenPos = trader.positions.find((p) => p.symbol === symbol);
   if (hasOpenPos && thesis.conclusion.decision === 'REJECT') {
     thesisUpdates[symbol] = thesis;
   }
 }
 
-// ── Scan log ─────────────────────────────────────────────────
-const scanLog = [];
-function addScanLog(msg) {
-  const time = new Date().toUTCString().slice(17, 25);
-  scanLog.push(`[${time}] ${msg}`);
-  if (scanLog.length > 50) scanLog.shift();
-}
-
-// ── Main loop (continuous) ───────────────────────────────────
+// ── Main ─────────────────────────────────────────────────────
 async function main() {
   console.log('\n  🧪 ALCHEMIST BRAIN — STARTING UP');
-  console.log(`  Mode: ${forceMock ? 'MOCK (forced)' : 'AUTO (real → mock fallback)'}`);
-  console.log(`  Symbols: Dynamic top ${config.maxConcurrentPositions || 15} by volume × volatility`);
-  console.log(`  Scan: CONTINUOUS (no pauses)`);
-  console.log(`  Balance: $${config.paperBalance}`);
+  console.log(`  Mode: ${forceMock ? 'MOCK (forced)' : 'LIVE (real Binance data → mock fallback)'}`);
+  console.log(`  Scanner: Top 15 coins by volume × volatility`);
+  console.log(`  Balance: $${config.paperBalance} (paper)`);
   console.log(`  Auto-Buy: ${config.autoBuy ? 'ON' : 'OFF'}`);
-  console.log('');
 
-  // Start dashboard
-  dashboard.start();
-
-  // Initial symbol scan
+  // ── Initialize data source ───────────────────────────────
   if (!forceMock) {
-    await scanner.scanTopCoins();
-  } else {
-    // Mock mode: use default symbols but still show scanner
+    console.log('  Connecting to Binance...');
+    const ok = await liveClient.init();
+    if (ok) {
+      console.log('  ✓ Binance REST available');
+      scanner = new CoinScanner(liveClient);
+    } else {
+      console.log('  ⚠️  Binance unavailable — switching to MOCK');
+      mockMode = true;
+    }
+  }
+
+  if (mockMode) {
+    scanner = new CoinScanner({ getExchangeInfo: async () => ({ symbols: [] }), getAllTickers24h: async () => [] });
     scanner._fallbackCoins();
-    // Generate mock scanner data with volume/volatility
-    const mockTicker = config.symbols.map((s) => ({
-      symbol: s,
-      volume: 50_000_000 + Math.random() * 2_000_000_000,
-      volatility: 2 + Math.random() * 8,
-      price: 100 + Math.random() * 90000,
-      priceChangePct: (Math.random() - 0.5) * 10,
-      score: Math.random() * 1e9,
-      volumeStr: `$${(50 + Math.random() * 2000).toFixed(0)}M`,
-    })).sort((a, b) => b.score - a.score);
-    scanner.coins = mockTicker;
+  }
+
+  // ── Scan for top coins ────────────────────────────────────
+  console.log('  Scanning for top coins...');
+  if (!mockMode) {
+    try {
+      await scanner.scanTopCoins();
+    } catch (e) {
+      console.log(`  ⚠️  Scanner error: ${e.message}, using fallback`);
+      scanner._fallbackCoins();
+    }
+  } else {
+    scanner.coins = getMockScannerCoins(config.symbols);
   }
   currentSymbols = scanner.coins.map((c) => c.symbol);
+  console.log(`  Tracking: ${currentSymbols.join(', ')}`);
+  console.log('');
 
-  // Update dashboard with scanner data
+  // ── Connect WebSocket (live mode) ─────────────────────────
+  if (!mockMode) {
+    try {
+      await liveClient.connectWebSocket(currentSymbols, config.timeframes);
+      addLog('📡 WebSocket connected — real-time data streaming');
+    } catch (e) {
+      console.log(`  ⚠️  WebSocket failed: ${e.message} — using REST polling`);
+    }
+  }
+
+  // ── Start dashboard ───────────────────────────────────────
+  dashboard.start();
   dashboard.update({
     scanner: scanner.coins,
     accountState: trader.getAccountState(),
@@ -206,26 +202,106 @@ async function main() {
     scanLog,
   });
 
-  // Continuous loop — no sleep between scans
+  // ── Derivatives refresh timer (every 5 min) ───────────────
+  let lastDerivativesRefresh = 0;
+  const DERIVATIVES_INTERVAL = 5 * 60 * 1000;
+
+  // ── Continuous loop ───────────────────────────────────────
   while (running) {
     scanCount++;
     const scanStart = Date.now();
 
     try {
-      // Periodically rescan top coins (every 5 min)
-      if (scanCount > 1 && Date.now() - scanner.lastScan > scanner.scanIntervalMs && !forceMock) {
-        if (!fetchingNext) {
-          fetchingNext = true;
+      // Periodic coin rescan (every 5 min)
+      if (scanCount > 1 && Date.now() - scanner.lastScan > scanner.scanIntervalMs && !fetchingNext) {
+        fetchingNext = true;
+        if (!mockMode) {
           scanner.scanTopCoins().then(() => {
-            currentSymbols = scanner.coins.map((c) => c.symbol);
+            const newSymbols = scanner.coins.map((c) => c.symbol);
+            // Subscribe to new symbols on WS
+            const added = newSymbols.filter((s) => !currentSymbols.includes(s));
+            const removed = currentSymbols.filter((s) => !newSymbols.includes(s));
+            if (added.length > 0 || removed.length > 0) {
+              addLog(`📡 Scanner updated: +${added.length} new, -${removed.length} removed`);
+              // Resubscribe WS
+              if (liveClient._wsConnected) {
+                // Unsubscribe removed
+                if (removed.length > 0) {
+                  const unsubs = removed.flatMap((s) => {
+                    const l = s.toLowerCase();
+                    return [...config.timeframes.map((tf) => `${l}@kline_${tf}`), `${l}@ticker`];
+                  });
+                  liveClient._ws.send(JSON.stringify({ method: 'UNSUBSCRIBE', params: unsubs, id: Date.now() }));
+                }
+                // Subscribe added
+                if (added.length > 0) {
+                  const subs = added.flatMap((s) => {
+                    const l = s.toLowerCase();
+                    return [...config.timeframes.map((tf) => `${l}@kline_${tf}`), `${l}@ticker`];
+                  });
+                  liveClient._ws.send(JSON.stringify({ method: 'SUBSCRIBE', params: subs, id: Date.now() }));
+                }
+              }
+            }
+            currentSymbols = newSymbols;
             dashboard.update({ scanner: scanner.coins });
             fetchingNext = false;
-          });
+          }).catch(() => { fetchingNext = false; });
+        } else {
+          scanner.coins = getMockScannerCoins(config.symbols);
+          currentSymbols = scanner.coins.map((c) => c.symbol);
+          dashboard.update({ scanner: scanner.coins });
+          fetchingNext = false;
         }
       }
 
-      // Fetch data for all current symbols
-      const snapshots = await fetchSnapshots(currentSymbols);
+      // Fetch data
+      let snapshots;
+      if (mockMode) {
+        snapshots = getMockSnapshots(currentSymbols);
+      } else {
+        // Candles from WS cache, derivatives from REST (throttled)
+        const shouldRefreshDerivatives = Date.now() - lastDerivativesRefresh > DERIVATIVES_INTERVAL;
+
+        snapshots = {};
+        for (const symbol of currentSymbols) {
+          try {
+            // Candles — from WS cache (instant, no API call)
+            const klines = {};
+            for (const tf of config.timeframes) {
+              klines[tf] = await liveClient.getCandles(symbol, tf, config.candleLimit);
+            }
+
+            if (shouldRefreshDerivatives) {
+              // Full snapshot with REST derivatives
+              snapshots[symbol] = await liveClient.getSymbolSnapshot(currentSymbols.includes(symbol) ? symbol : symbol, config.timeframes);
+            } else {
+              // Just candles + cached ticker from WS
+              snapshots[symbol] = {
+                symbol,
+                timestamp: Date.now(),
+                klines,
+                openInterest: null,
+                oiHistory: [],
+                funding: null,
+                fundingHistory: [],
+                topTraderLS: [],
+                globalLS: [],
+                takerVolume: [],
+                ticker24h: liveClient.getTicker(symbol),
+              };
+            }
+          } catch (e) {
+            if (debug) addLog(`⚠️ ${symbol}: ${e.message}`);
+            snapshots[symbol] = null;
+          }
+        }
+
+        if (shouldRefreshDerivatives) {
+          lastDerivativesRefresh = Date.now();
+          addLog('🔄 Derivatives data refreshed (OI, funding, L/S ratios)');
+        }
+      }
 
       // Analyze each symbol
       const opportunities = [];
@@ -239,14 +315,13 @@ async function main() {
       // Update positions
       const actions = trader.updatePositions(currentPrices, thesisUpdates);
       for (const action of actions) {
-        if (action.type === 'TP1_HIT') addScanLog(`🎯 TP1 hit ${action.symbol} @ ${action.price}`);
-        else if (action.type === 'BREAKEVEN_MOVED') addScanLog(`📌 Breakeven ${action.symbol} @ ${action.stopLoss}`);
-        else if (action.type === 'TRAILING_STARTED') addScanLog(`📈 Trailing started ${action.symbol}`);
+        if (action.type === 'TP1_HIT') addLog(`🎯 TP1 hit ${action.symbol} @ ${action.price?.toFixed(2)}`);
+        else if (action.type === 'BREAKEVEN_MOVED') addLog(`📌 Breakeven ${action.symbol} @ ${action.stopLoss?.toFixed(2)}`);
+        else if (action.type === 'TRAILING_STARTED') addLog(`📈 Trailing started ${action.symbol}`);
         else if (action.type === 'POSITION_CLOSED') {
           const pnlStr = action.pnlUSD >= 0 ? `+${action.pnlUSD.toFixed(2)}` : `${action.pnlUSD.toFixed(2)}`;
           const emoji = action.pnlUSD >= 0 ? '✅' : '❌';
-          addScanLog(`${emoji} CLOSED ${action.symbol} @ ${action.exitPrice} | PnL: ${pnlStr} (${action.pnlPct.toFixed(2)}%) | ${action.reason}`);
-          // Record in memory
+          addLog(`${emoji} CLOSED ${action.symbol} @ ${action.exitPrice?.toFixed(2)} | PnL: ${pnlStr} (${action.pnlPct.toFixed(2)}%) | ${action.reason}`);
           const completedTrade = trader.completedTrades.find(
             (t) => t.symbol === action.symbol && t.exitTime > scanStart
           );
@@ -265,31 +340,29 @@ async function main() {
         scanLog,
       });
 
-      // Debug scan summary
-      if (debug) {
+      if (debug && scanCount % 10 === 0) {
         const scanTime = ((Date.now() - scanStart) / 1000).toFixed(1);
-        const enterCount = opportunities.filter((o) => o.conclusion.decision === 'ENTER').length;
-        const waitCount = opportunities.filter((o) => o.conclusion.decision === 'WAIT').length;
-        const rejectCount = opportunities.filter((o) => o.conclusion.decision === 'REJECT').length;
-        addScanLog(`Scan #${scanCount} | ${scanTime}s | ${mockMode ? 'MOCK' : 'LIVE'} | E:${enterCount} W:${waitCount} R:${rejectCount}`);
+        const eCount = opportunities.filter((o) => o.conclusion.decision === 'ENTER').length;
+        addLog(`Scan #${scanCount} | ${scanTime}s | ${mockMode ? 'MOCK' : 'LIVE'} | E:${eCount}`);
       }
 
-      // Small delay to prevent CPU thrashing (not a full pause)
-      await new Promise((r) => setTimeout(r, 100));
+      // Small delay — 500ms in live mode (WS updates continuously),
+      // 100ms in mock mode
+      await new Promise((r) => setTimeout(r, mockMode ? 100 : 500));
 
     } catch (err) {
-      if (debug) console.error('[Main] Scan error:', err.message);
-      addScanLog(`⚠️ Error: ${err.message}`);
+      if (debug) console.error('[Main]', err.message);
+      addLog(`⚠️ Error: ${err.message}`);
       await new Promise((r) => setTimeout(r, 2000));
     }
   }
 
   dashboard.stop();
+  if (!mockMode) liveClient.disconnect();
   console.log('Alchemist Brain stopped.');
 }
 
-// ── Start ────────────────────────────────────────────────────
 main().catch((err) => {
-  console.error('Fatal error:', err);
+  console.error('Fatal:', err);
   process.exit(1);
 });

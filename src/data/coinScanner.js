@@ -9,8 +9,8 @@
 const log = (...args) => console.log('[Scanner]', ...args);
 
 export class CoinScanner {
-  constructor(binanceClient) {
-    this.binance = binanceClient;
+  constructor(dataClient) {
+    this.client = dataClient; // LiveDataClient or BinanceClient
     this.coins = [];           // Current top coins
     this.allPairs = [];        // All USDT futures pairs
     this.lastScan = 0;
@@ -24,13 +24,7 @@ export class CoinScanner {
    */
   async fetchAllPairs() {
     try {
-      const url = `${this.binance.futuresURL}/fapi/v1/exchangeInfo`;
-      const resp = await fetch(url, {
-        headers: { 'User-Agent': 'AlchemistBrain/1.0' },
-        signal: AbortSignal.timeout(15000),
-      });
-      const data = await resp.json();
-      // Filter: only USDT perpetuals that are actively trading
+      const data = await this.client.getExchangeInfo();
       this.allPairs = data.symbols
         .filter((s) =>
           s.quoteAsset === 'USDT' &&
@@ -50,17 +44,14 @@ export class CoinScanner {
     }
   }
 
-  /**
-   * Get 24h ticker for all pairs (single API call).
-   */
   async fetchAllTickers() {
     try {
-      const url = `${this.binance.futuresURL}/fapi/v1/ticker/24hr`;
-      const resp = await fetch(url, {
-        headers: { 'User-Agent': 'AlchemistBrain/1.0' },
-        signal: AbortSignal.timeout(15000),
-      });
-      const data = await resp.json();
+      // Try cached WS tickers first
+      if (this.client.getAllTickers && this.client.getAllTickers().length > 0) {
+        return this.client.getAllTickers();
+      }
+      // Fallback to REST
+      const data = await this.client.getAllTickers24h();
       return data.filter((t) => t.symbol.endsWith('USDT'));
     } catch (e) {
       log(`Failed to fetch tickers: ${e.message}`);
