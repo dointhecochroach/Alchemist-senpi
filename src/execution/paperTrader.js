@@ -62,7 +62,9 @@ export class PaperTrader {
     if (!thesis || thesis.conclusion.decision !== 'ENTER') return null;
     if (!riskAnalysis || !riskAnalysis.approved) return null;
 
-    const direction = thesis.conclusion.direction;
+    // Normalize direction to LONG/SHORT for internal calculations
+    const rawDir = thesis.conclusion.direction;
+    const direction = rawDir === 'BULLISH' ? 'LONG' : rawDir === 'BEARISH' ? 'SHORT' : rawDir;
     const symbol = thesis.symbol;
     const entryPrice = thesis.currentPrice || riskAnalysis.entryPrice;
     if (!entryPrice) return null;
@@ -71,9 +73,15 @@ export class PaperTrader {
     const riskUSD = riskAnalysis.riskUSD;
     const stopLossPrice = riskAnalysis.stopLossPrice;
     const stopDistPct = Math.abs((entryPrice - stopLossPrice) / entryPrice) * 100;
-    const positionSize = riskUSD / (stopDistPct / 100); // Position size in USD
+    let positionSize = riskUSD / (stopDistPct / 100); // Position size in USD
 
-    if (positionSize > this.balance) {
+    // Cap position size at 3x balance (max 3x leverage)
+    const maxSize = this.balance * 3;
+    if (positionSize > maxSize) {
+      positionSize = maxSize;
+    }
+
+    if (positionSize > this.balance * 3) {
       console.warn(`[PaperTrader] Insufficient balance: need $${positionSize.toFixed(2)}, have $${this.balance.toFixed(2)}`);
       return null;
     }

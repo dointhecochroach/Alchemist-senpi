@@ -279,17 +279,37 @@ export class LiveDataClient {
   // Futures-only — returns empty if blocked
   async getTopTraderLS(symbol, period = '15m', limit = 30) {
     if (!this.futuresAvailable) return [];
+    // Try position ratio first, then account ratio as fallback
     try {
       const raw = await this._rest('/futures/data/topLongShortPositionRatio', { symbol, period, limit });
-      return raw.map((r) => ({
+      if (raw && raw.length > 0) {
+        return raw.map((r) => ({
+          timestamp: r.timestamp,
+          longShortRatio: parseFloat(r.longShortRatio),
+          longAccount: parseFloat(r.longAccount),
+          shortAccount: parseFloat(r.shortAccount),
+          longPosition: parseFloat(r.longPosition || 0),
+          shortPosition: parseFloat(r.shortPosition || 0),
+        }));
+      }
+    } catch (e) {
+      log(`topLongShortPositionRatio failed for ${symbol}: ${e.message}`);
+    }
+    // Fallback: account ratio
+    try {
+      const raw2 = await this._rest('/futures/data/topLongShortAccountRatio', { symbol, period, limit });
+      return raw2.map((r) => ({
         timestamp: r.timestamp,
         longShortRatio: parseFloat(r.longShortRatio),
         longAccount: parseFloat(r.longAccount),
         shortAccount: parseFloat(r.shortAccount),
-        longPosition: parseFloat(r.longPosition || 0),
-        shortPosition: parseFloat(r.shortPosition || 0),
+        longPosition: 0,
+        shortPosition: 0,
       }));
-    } catch { return []; }
+    } catch (e) {
+      log(`topLongShortAccountRatio also failed for ${symbol}`);
+      return [];
+    }
   }
 
   async getGlobalLS(symbol, period = '15m', limit = 30) {

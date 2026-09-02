@@ -108,6 +108,11 @@ async function analyzeSymbol(symbol, snapshot, scanStart, opportunities, current
   // Auto-buy
   if (thesis.conclusion.decision === 'ENTER' && config.autoBuy) {
     const tradeDir = thesis.conclusion.direction;
+    // Don't open if we already have a position on this symbol
+    const existing = trader.positions.find((p) => p.symbol === symbol);
+    if (existing) {
+      return;
+    }
     const riskAnalysis = brain.riskAnalyzer.analyze(smcAnalysis, smartMoneyAnalysis, accountState, tradeDir);
     if (riskAnalysis.approved && trader.positions.length < config.maxConcurrentPositions) {
       thesis.risk = riskAnalysis;
@@ -303,8 +308,8 @@ async function main() {
         addLog(`Scan #${scanCount} | ${scanTime}s | E:${eCount}`);
       }
 
-      // 2 second delay between scans
-      await new Promise((r) => setTimeout(r, 2000));
+      // 5 second delay between scans — realistic pace
+      await new Promise((r) => setTimeout(r, 5000));
 
     } catch (err) {
       if (debug) console.error('[Main]', err.message);

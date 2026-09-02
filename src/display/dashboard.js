@@ -382,7 +382,8 @@ export class Dashboard {
       const d = t.direction === 'LONG' ? C.brightGreen : C.brightRed;
       const ps = t.pnlUsd >= 0 ? `+${t.pnlUsd.toFixed(2)}` : `${t.pnlUsd.toFixed(2)}`;
 
-      L.push(`  ${r}${t.result.padEnd(5)}${C.reset} ${C.brightWhite}${(t.symbol || '').padEnd(11)}${C.reset} ${d}${(t.direction || '').padEnd(5)}${C.reset} ${C.dim}in${C.reset} ${(t.entryPrice || 0).toFixed(2)} ${C.dim}out${C.reset} ${(t.exitPrice || 0).toFixed(2)} ${t.pnlPct >= 0 ? C.brightGreen : C.brightRed}${t.pnlPct >= 0 ? '+' : ''}${t.pnlPct.toFixed(2)}%${C.reset} ${ps >= 0 ? '+' : ''}${C.dim}$${ps}${C.reset} ${C.dim}${t.exitReason}${C.reset}`);
+      const ps2 = t.pnlUsd >= 0 ? `+$${t.pnlUsd.toFixed(2)}` : `-$${Math.abs(t.pnlUsd).toFixed(2)}`;
+      L.push(`  ${r}${t.result.padEnd(5)}${C.reset} ${C.brightWhite}${(t.symbol || '').padEnd(11)}${C.reset} ${d}${(t.direction || '').padEnd(5)}${C.reset} ${C.dim}in${C.reset} ${(t.entryPrice || 0).toFixed(2)} ${C.dim}out${C.reset} ${(t.exitPrice || 0).toFixed(2)} ${t.pnlPct >= 0 ? C.brightGreen : C.brightRed}${t.pnlPct >= 0 ? '+' : ''}${t.pnlPct.toFixed(2)}%${C.reset} ${t.pnlUsd >= 0 ? C.brightGreen : C.brightRed}${ps2}${C.reset} ${C.dim}${t.exitReason}${C.reset}`);
     }
 
     L.push('');
