@@ -27,6 +27,7 @@ import { ThesisEngine } from './brain/thesisEngine.js';
 import { Memory } from './brain/memory.js';
 import { PaperTrader } from './execution/paperTrader.js';
 import { Dashboard } from './display/dashboard.js';
+import { appendFileSync } from 'fs';
 
 const args = process.argv.slice(2);
 const debug = args.includes('--debug');
@@ -51,10 +52,15 @@ let fetchingNext = false;
 
 // ── Scan log ─────────────────────────────────────────────────
 const scanLog = [];
+const LOG_FILE = 'storage/bot.log';
+
 function addLog(msg) {
   const t = new Date().toUTCString().slice(17, 25);
-  scanLog.push(`[${t}] ${msg}`);
+  const entry = `[${t}] ${msg}`;
+  scanLog.push(entry);
   if (scanLog.length > 50) scanLog.shift();
+  // Write to log file for scrollback viewing
+  try { appendFileSync(LOG_FILE, entry + '\n'); } catch {}
 }
 
 // ── Graceful shutdown ────────────────────────────────────────
@@ -344,9 +350,9 @@ async function main() {
         addLog(`Scan #${scanCount} | ${scanTime}s | ${mockMode ? 'MOCK' : 'LIVE'} | E:${eCount}`);
       }
 
-      // Small delay — 500ms in live mode (WS updates continuously),
-      // 100ms in mock mode
-      await new Promise((r) => setTimeout(r, mockMode ? 100 : 500));
+      // Small delay — 2 seconds in live mode (WS updates continuously),
+      // 3 seconds in mock mode (slower, more realistic)
+      await new Promise((r) => setTimeout(r, mockMode ? 3000 : 2000));
 
     } catch (err) {
       if (debug) console.error('[Main]', err.message);

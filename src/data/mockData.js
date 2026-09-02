@@ -62,29 +62,29 @@ export class MockDataGenerator {
       state.candlesInTrend++;
 
       // Generate OHLC
-      const trendBias = state.trend === 'BULLISH' ? 0.0008 : -0.0008;
-      const noise = (Math.random() - 0.5) * state.volatility;
+      const trendBias = state.trend === 'BULLISH' ? 0.0003 : -0.0003;
+      const noise = (Math.random() - 0.5) * state.volatility * 0.3;
       const change = trendBias + noise;
 
       const open = price;
       const close = price * (1 + change);
 
       // Sometimes create displacement candles (larger moves)
-      const isDisplacement = Math.random() < 0.05;
-      const displacementSize = isDisplacement ? state.volatility * 3 : 0;
+      const isDisplacement = Math.random() < 0.03;
+      const displacementSize = isDisplacement ? state.volatility * 2 : 0;
       const dispDir = state.trend === 'BULLISH' ? 1 : -1;
       const adjustedClose = isDisplacement ? open * (1 + change + displacementSize * dispDir) : close;
 
       // Wicks
-      const wickSize = state.volatility * price * (0.5 + Math.random());
+      const wickSize = state.volatility * price * (0.3 + Math.random() * 0.5);
       const bodyHigh = Math.max(open, adjustedClose);
       const bodyLow = Math.min(open, adjustedClose);
       const high = bodyHigh + wickSize * Math.random();
       const low = bodyLow - wickSize * Math.random();
 
       // Occasionally create sweep candles (wick beyond recent levels then close back)
-      const isSweep = Math.random() < 0.03;
-      const sweepWick = wickSize * 3;
+      const isSweep = Math.random() < 0.02;
+      const sweepWick = wickSize * 2;
       const finalHigh = isSweep ? high + sweepWick : high;
       const finalLow = isSweep ? low - sweepWick : low;
 
@@ -244,6 +244,7 @@ export class MockDataGenerator {
 
   /**
    * Update prices slightly for real-time simulation.
+   * Very small movements to avoid triggering stops too fast.
    */
   tickPrices(snapshots) {
     for (const symbol of Object.keys(snapshots)) {
@@ -251,8 +252,8 @@ export class MockDataGenerator {
       if (!snap.klines?.['15m']?.length) continue;
       const candles = snap.klines['15m'];
       const last = candles[candles.length - 1];
-      // Small price movement
-      const change = (Math.random() - 0.5) * 0.003;
+      // Very small price movement — 0.05% max per tick
+      const change = (Math.random() - 0.5) * 0.0005;
       const newClose = last.close * (1 + change);
       last.close = parseFloat(newClose.toFixed(6));
       last.high = Math.max(last.high, last.close);

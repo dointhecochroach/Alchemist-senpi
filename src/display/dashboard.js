@@ -13,10 +13,11 @@
  */
 
 import { renderScoreCard, renderAccountSummary, Colors as C } from './scorecard.js';
+import { readFileSync, existsSync } from 'fs';
 
 const VIEW_KEYS = {
   '1': 'dashboard', '2': 'scorecard', '3': 'journal',
-  '4': 'history', '5': 'scanner', '6': 'memory',
+  '4': 'history', '5': 'scanner', '6': 'memory', '7': 'log',
 };
 
 const W = 66;
@@ -50,8 +51,8 @@ export class Dashboard {
   start() {
     this.running = true;
     this.frozen = false;
-    process.stdout.write('\x1b[?1049h'); // Alternate screen
-    process.stdout.write('\x1b[?25l');   // Hide cursor
+    // NO alternate screen — use normal screen so Termux scrollback works
+    process.stdout.write('\x1b[?25l'); // Hide cursor only
 
     if (process.stdin.isTTY) {
       process.stdin.setRawMode(true);
@@ -70,9 +71,9 @@ export class Dashboard {
       process.stdin.setRawMode(false);
       process.stdin.pause();
     }
-    process.stdout.write('\x1b[?25h');   // Show cursor
-    process.stdout.write('\x1b[?1049l'); // Restore primary screen
-    process.stdout.write(C.reset);
+    process.stdout.write('\x1b[?25h'); // Show cursor
+    // NO alternate screen restore — just reset colors
+    process.stdout.write(C.reset + '\n');
   }
 
   _handleKey(key) {
@@ -83,8 +84,9 @@ export class Dashboard {
     if (key === 'p' || key === 'P') {
       this.frozen = !this.frozen;
       if (this.frozen) {
-        // Show freeze notice at bottom
-        process.stdout.write(`\x1b[${W};1H${C.brightYellow}${C.bold}  ⏸ FROZEN — press [p] to resume${C.reset}`);
+        // Print freeze banner at bottom of current content
+        // Don't reposition cursor — just print below current content
+        process.stdout.write('\n' + C.brightYellow + C.bold + '  ⏸ FROZEN — screen paused, bot still running. Scroll up to read. Press [p] to resume.' + C.reset + '\n');
       } else {
         this._needsRedraw = true;
         this.render();
@@ -95,12 +97,15 @@ export class Dashboard {
     if (view) {
       this.currentView = view;
       this._needsRedraw = true;
-      this.render();
+      if (!this.frozen) this.render();
     }
   }
 
   update(data) {
     this.data = { ...this.data, ...data };
+    // Only render if NOT frozen — this is the key for scrolling
+    // When frozen, screen keeps whatever was displayed + the freeze banner
+    // User can scroll the terminal's normal scrollback buffer
     if (!this.frozen) {
       this.render();
     }
@@ -109,12 +114,10 @@ export class Dashboard {
   render() {
     if (!this.running || this.frozen) return;
     const out = this._renderView();
-    if (this._needsRedraw) {
-      process.stdout.write('\x1b[H' + out + '\x1b[J');
-      this._needsRedraw = false;
-    } else {
-      process.stdout.write('\x1b[H' + out);
-    }
+    // Clear screen and write from top — no alternate screen
+    // This overwrites in place, no waterfall
+    process.stdout.write('\x1b[2J\x1b[H' + out);
+    this._needsRedraw = false;
     this._lastRender = out;
   }
 
@@ -130,6 +133,7 @@ export class Dashboard {
       case 'history': body = this._renderHistory(); break;
       case 'scanner': body = this._renderScanner(); break;
       case 'memory': body = this._renderMemory(); break;
+      case 'log': body = this._renderLog(); break;
       default: body = this._renderDashboard();
     }
 
@@ -170,6 +174,7 @@ export class Dashboard {
       ['4', 'History', 'history'],
       ['5', 'Scanner', 'scanner'],
       ['6', 'Memory', 'memory'],
+      ['7', 'Log', 'log'],
     ];
 
     let line = '';
@@ -481,12 +486,44 @@ export class Dashboard {
   }
 
   // ═══════════════════════════════════════════════════════════
+  //  [7] LOG — Scrollable event log
+  // ═══════════════════════════════════════════════════════════
+
+  _renderLog() {
+    const L = [];
+    L.push(section('📋 EVENT LOG  —  press [p] to freeze and scroll'));
+
+    let logLines = [];
+    try {
+      if (existsSync('storage/bot.log')) {
+        const content = readFileSync('storage/bot.log', 'utf-8');
+        logLines = content.split('\n').filter(l => l.trim());
+      }
+    } catch {}
+
+    if (logLines.length === 0) {
+      L.push(`  ${C.dim}No events logged yet.${C.reset}`);
+      return L.join('\n') + '\n';
+    }
+
+    // Show last 40 lines
+    const recent = logLines.slice(-40);
+    for (const line of recent) {
+      L.push(`  ${C.dim}${line}${C.reset}`);
+    }
+
+    L.push(`\n  ${C.dim}${logLines.length} total events. Full log: storage/bot.log${C.reset}`);
+    L.push(`  ${C.dim}Press [p] then scroll up to read older events.${C.reset}`);
+    return L.join('\n');
+  }
+
+  // ═══════════════════════════════════════════════════════════
   //  FOOTER
   // ═══════════════════════════════════════════════════════════
 
   _renderFooter() {
     let f = `\n${hr()}\n`;
-    f += `  ${C.dim}[1-6] Switch views${C.reset}  ${C.brightYellow}[p] Freeze${C.reset}  ${C.dim}[q] Quit${C.reset}`;
+    f += `  ${C.dim}[1-7] Switch views${C.reset}  ${C.brightYellow}[p] Freeze${C.reset}  ${C.dim}[q] Quit${C.reset}`;
     if (this.frozen) f += `  ${C.brightYellow}⏸ FROZEN${C.reset}`;
     return f;
   }
