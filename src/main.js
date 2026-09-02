@@ -55,6 +55,15 @@ function addLog(msg) {
   try { appendFileSync(LOG_FILE, entry + '\n'); } catch {}
 }
 
+// ── Silence console so it doesn't scroll the terminal ─────
+// Route all console.log/error to log file instead of stdout
+console.log = (...args) => {
+  try { appendFileSync(LOG_FILE, '[console] ' + args.join(' ') + '\n'); } catch {}
+};
+console.error = (...args) => {
+  try { appendFileSync(LOG_FILE, '[error] ' + args.join(' ') + '\n'); } catch {}
+};
+
 // ── Graceful shutdown ────────────────────────────────────────
 process.on('SIGINT', () => {
   running = false;
@@ -98,7 +107,8 @@ async function analyzeSymbol(symbol, snapshot, scanStart, opportunities, current
 
   // Auto-buy
   if (thesis.conclusion.decision === 'ENTER' && config.autoBuy) {
-    const riskAnalysis = brain.riskAnalyzer.analyze(smcAnalysis, smartMoneyAnalysis, accountState);
+    const tradeDir = thesis.conclusion.direction;
+    const riskAnalysis = brain.riskAnalyzer.analyze(smcAnalysis, smartMoneyAnalysis, accountState, tradeDir);
     if (riskAnalysis.approved && trader.positions.length < config.maxConcurrentPositions) {
       thesis.risk = riskAnalysis;
       const position = trader.openPosition(thesis, riskAnalysis);

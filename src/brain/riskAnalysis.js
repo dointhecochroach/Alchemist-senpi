@@ -22,10 +22,13 @@ export class RiskAnalyzer {
   /**
    * Analyze risk for a potential trade.
    */
-  analyze(smcAnalysis, smartMoneyAnalysis, accountState) {
+  analyze(smcAnalysis, smartMoneyAnalysis, accountState, tradeDirection = null) {
     const balance = accountState?.balance || 10000;
     const openPositions = accountState?.openPositions || [];
     const dailyPnL = accountState?.dailyPnL || 0;
+
+    // Use trade direction if provided, otherwise fall back to SMC bias
+    const effectiveDir = tradeDirection || smcAnalysis.thesisDirection || smcAnalysis.structure?.bias || 'BULLISH';
 
     const result = {
       approved: true,
@@ -72,8 +75,8 @@ export class RiskAnalyzer {
     // ── Calculate position size ──────────────────────────────
     result.riskUSD = newRiskUSD;
     result.stopLossPct = this.config.initialStoplossPct;
-    result.stopLossPrice = this._calcStopLoss(smcAnalysis);
-    result.tp1Price = this._calcTP1(smcAnalysis);
+    result.stopLossPrice = this._calcStopLoss(smcAnalysis, effectiveDir);
+    result.tp1Price = this._calcTP1(smcAnalysis, effectiveDir);
 
     // ── R:R ratio ────────────────────────────────────────────
     if (smcAnalysis.currentPrice && result.stopLossPrice && result.tp1Price) {
@@ -104,35 +107,33 @@ export class RiskAnalyzer {
     return result;
   }
 
-  _calcStopLoss(smcAnalysis) {
+  _calcStopLoss(smcAnalysis, direction = 'LONG') {
     const price = smcAnalysis.currentPrice;
     const slPct = this.config.initialStoplossPct / 100;
 
-    // Try to place stop beyond protected level
-    if (smcAnalysis.thesisDirection === 'BEARISH' || smcAnalysis.structure?.bias === 'BEARISH') {
-      // Short — stop above protected high or above current price
+    if (direction === 'BEARISH' || direction === 'SHORT') {
+      // Short — stop ABOVE entry price
       const protectedHigh = smcAnalysis.protectedLevels?.protectedHigh?.price;
       if (protectedHigh && protectedHigh > price) {
-        return protectedHigh * 1.002; // Small buffer above
+        return protectedHigh * 1.002;
       }
       return price * (1 + slPct);
     } else {
-      // Long — stop below protected low or below current price
+      // Long — stop BELOW entry price
       const protectedLow = smcAnalysis.protectedLevels?.protectedLow?.price;
       if (protectedLow && protectedLow < price) {
-        return protectedLow * 0.998; // Small buffer below
+        return protectedLow * 0.998;
       }
       return price * (1 - slPct);
     }
   }
 
-  _calcTP1(smcAnalysis) {
+  _calcTP1(smcAnalysis, direction = 'LONG') {
     const price = smcAnalysis.currentPrice;
     const tpPct = this.config.tp1Pct / 100;
 
-    // Try to place TP at the nearest FVG or liquidity target
-    if (smcAnalysis.thesisDirection === 'BEARISH' || smcAnalysis.structure?.bias === 'BEARISH') {
-      // Short — TP at lower FVG or liquidity target
+    if (direction === 'BEARISH' || direction === 'SHORT') {
+      // Short — TP BELOW entry
       const fvg = smcAnalysis.fvg?.current;
       if (fvg?.direction === 'BEARISH' && fvg.lowerBoundary < price) {
         return fvg.lowerBoundary;
@@ -141,7 +142,7 @@ export class RiskAnalyzer {
       if (target?.level < price) return target.level;
       return price * (1 - tpPct);
     } else {
-      // Long — TP at upper FVG or liquidity target
+      // Long — TP ABOVE entry
       const fvg = smcAnalysis.fvg?.current;
       if (fvg?.direction === 'BULLISH' && fvg.upperBoundary > price) {
         return fvg.upperBoundary;
